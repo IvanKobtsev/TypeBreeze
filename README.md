@@ -4,15 +4,17 @@ UnionBreeze gives finite TypeScript string unions a dedicated closed-set member
 switcher in WebStorm. Place the caret on a contextually typed string literal and
 invoke **Change Union Member** through Alt+Enter or **Alt+Shift+U**.
 
-TypeScript semantics are provided by the bundled, editor-neutral Rust language
-server. The WebStorm plugin is a thin LSP and popup adapter and does not use
-JetBrains TypeScript type-resolution APIs. Declaration literals are indexed but
-are intentionally not switchable.
+TypeScript semantics are provided by an editor-neutral Rust language server,
+which supervises a bundled compiler worker using the project's TypeScript
+installation. The worker asks TypeScript directly for each literal's contextual
+type. The WebStorm plugin is a thin LSP and popup adapter and does not use
+JetBrains TypeScript type-resolution APIs.
 
-The current resolver supports explicit variable annotations, unambiguous
-explicitly typed function parameters, typed object properties, `satisfies`,
-local aliases, and named imports. It fails closed for broad, mixed, computed,
-cyclic, generic, overloaded, unresolved, or oversized domains.
+The resolver accepts contextual types whose assignable values reduce entirely
+to 2–100 string literals (apart from `null`/`undefined` introduced by optional
+contexts). Because TypeScript performs the contextual resolution, mapped and
+utility types, generics, imports, path mappings, and nested object arguments do
+not need UnionBreeze-specific traversal rules.
 
 ## Development
 

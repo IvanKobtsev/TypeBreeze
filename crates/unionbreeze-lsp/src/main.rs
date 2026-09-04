@@ -1,24 +1,29 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use lsp_server::{Connection, Message, Notification, Request, Response};
 use lsp_types::notification::Notification as LspNotification;
+use lsp_types::request::Request as LspRequest;
 use lsp_types::{
-    DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
-    InitializeParams, Position, ServerCapabilities, TextDocumentPositionParams,
-    TextDocumentSyncCapability, TextDocumentSyncKind,
+    DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams, Hover,
+    HoverContents, HoverParams, InitializeParams, MarkupContent, MarkupKind, ServerCapabilities,
+    TextDocumentPositionParams, TextDocumentSyncCapability, TextDocumentSyncKind,
     notification::{DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, Exit},
+    request::HoverRequest,
 };
-use std::{path::PathBuf, sync::Arc};
-use unionbreeze_core::{Project, ResolvedUsage};
-use unionbreeze_protocol::{
-    DocumentUnionsParams, DocumentUnionsResponse, LiteralKind, Location, Member, ResolvedLiteral,
-    span_to_range,
+use std::{
+    fs,
+    io::{BufRead, BufReader, Write},
+    path::Path,
+    process::{Child, ChildStdin, ChildStdout, Command, Stdio},
+    sync::{Arc, Mutex},
 };
+use unionbreeze_protocol::ResolvedLiteral;
 use url::Url;
 
 fn main() -> Result<()> {
     let (connection, io) = Connection::stdio();
     let init = ServerCapabilities {
         text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)),
+        hover_provider: Some(lsp_types::HoverProviderCapability::Simple(true)),
         ..Default::default()
     };
     let params: InitializeParams =
@@ -29,49 +34,50 @@ fn main() -> Result<()> {
         .and_then(|folder| folder.uri.to_file_path().ok())
         .or_else(|| std::env::current_dir().ok())
         .context("no workspace root")?;
-    let project = Arc::new(Project::new(root));
-    project.index_workspace();
-    log(&format!(
-        "indexed generation {} with {} TypeScript files",
-        project.snapshot().generation,
-        project.snapshot().files.len()
-    ));
-    run(&connection, project)?;
+    let worker = CompilerWorker::start(&root)
+        .map(Arc::new)
+        .map_err(|error| {
+            log(&format!(
+                "TypeScript compiler worker unavailable: {error:#}"
+            ));
+            error
+        })?;
+    log("TypeScript compiler worker ready");
+    run(&connection, worker)?;
     io.join().context("join LSP IO")?;
     Ok(())
 }
-fn run(connection: &Connection, project: Arc<Project>) -> Result<()> {
+fn run(connection: &Connection, worker: Arc<CompilerWorker>) -> Result<()> {
     for msg in &connection.receiver {
         match msg {
             Message::Request(req) => {
                 if connection.handle_shutdown(&req)? {
                     return Ok(());
                 }
-                handle_request(connection, &project, req)
+                handle_request(connection, &worker, req)
             }
-            Message::Notification(n) => handle_notification(&project, n),
+            Message::Notification(n) => handle_notification(&worker, n),
             Message::Response(_) => {}
         }
     }
     Ok(())
 }
-fn handle_notification(project: &Project, n: Notification) {
+fn handle_notification(worker: &CompilerWorker, n: Notification) {
     match n.method.as_str() {
         DidOpenTextDocument::METHOD => {
-            if let Ok(p) = serde_json::from_value::<DidOpenTextDocumentParams>(n.params)
-                && let Some(path) = uri_path(&p.text_document.uri)
-            {
-                project.update(path, p.text_document.text, Some(p.text_document.version))
+            if let Ok(p) = serde_json::from_value::<DidOpenTextDocumentParams>(n.params) {
+                let _ = worker.update(
+                    &p.text_document.uri,
+                    p.text_document.version,
+                    &p.text_document.text,
+                );
             }
         }
         DidChangeTextDocument::METHOD => {
             if let Ok(p) = serde_json::from_value::<DidChangeTextDocumentParams>(n.params)
-                && let (Some(path), Some(change)) = (
-                    uri_path(&p.text_document.uri),
-                    p.content_changes.into_iter().last(),
-                )
+                && let Some(change) = p.content_changes.into_iter().last()
             {
-                project.update(path, change.text, Some(p.text_document.version))
+                let _ = worker.update(&p.text_document.uri, p.text_document.version, &change.text);
             }
         }
         DidCloseTextDocument::METHOD => {
@@ -82,18 +88,14 @@ fn handle_notification(project: &Project, n: Notification) {
         _ => {}
     }
 }
-fn handle_request(connection: &Connection, project: &Project, req: Request) {
+fn handle_request(connection: &Connection, worker: &CompilerWorker, req: Request) {
     let result = match req.method.as_str() {
-        "unionBreeze/documentUnions" => serde_json::from_value::<DocumentUnionsParams>(req.params)
+        "unionBreeze/documentUnions" => worker.request("documentUnions", req.params).ok().flatten(),
+        "unionBreeze/resolveLiteral" => worker.request("resolveLiteral", req.params).ok().flatten(),
+        HoverRequest::METHOD => serde_json::from_value::<HoverParams>(req.params)
             .ok()
-            .and_then(|p| document_result(project, &p.text_document.uri))
+            .and_then(|p| hover_result(worker, &p.text_document_position_params))
             .and_then(|x| serde_json::to_value(x).ok()),
-        "unionBreeze/resolveLiteral" => {
-            serde_json::from_value::<TextDocumentPositionParams>(req.params)
-                .ok()
-                .and_then(|p| resolve_result(project, &p.text_document.uri, p.position))
-                .and_then(|x| serde_json::to_value(x).ok())
-        }
         _ => None,
     };
     let response = if let Some(value) = result {
@@ -103,91 +105,103 @@ fn handle_request(connection: &Connection, project: &Project, req: Request) {
     };
     let _ = connection.sender.send(Message::Response(response));
 }
-fn document_result(project: &Project, uri: &Url) -> Option<DocumentUnionsResponse> {
-    let path = uri_path(uri)?;
-    let snap = project.snapshot();
-    let file = snap.files.get(&path)?;
-    let mut literals: Vec<ResolvedLiteral> = project
-        .document_usages(&path)
+fn hover_result(worker: &CompilerWorker, params: &TextDocumentPositionParams) -> Option<Hover> {
+    let resolved: ResolvedLiteral = serde_json::from_value(
+        worker
+            .request("resolveLiteral", serde_json::to_value(params).ok()?)
+            .ok()??,
+    )
+    .ok()?;
+    let values = resolved
+        .declared_members
         .iter()
-        .filter_map(|r| convert(&snap, r))
-        .collect();
-    for domain in project.document_domains(&path) {
-        let members = members(&snap, &domain.members);
-        let domain_file = snap.files.get(&domain.path)?;
-        for member in &domain.members {
-            if member.path != path {
-                continue;
-            }
-            let declaration_file = snap.files.get(&member.path)?;
-            literals.push(ResolvedLiteral {
-                range: span_to_range(&declaration_file.text, member.span),
-                kind: LiteralKind::Declaration,
-                current_value: member.value.clone(),
-                contextual_type_name: domain.type_name.clone(),
-                domain: Location {
-                    uri: domain_file.uri.clone(),
-                    range: span_to_range(&domain_file.text, domain.name_span),
-                },
-                declared_members: members.clone(),
-                assignable_members: Vec::new(),
-            })
-        }
+        .map(|m| format!("`{}`", m.value))
+        .collect::<Vec<_>>()
+        .join(" · ");
+    Some(Hover {
+        contents: HoverContents::Markup(MarkupContent {
+            kind: MarkupKind::Markdown,
+            value: format!(
+                "Union member `{}`\n\nDefined by `{}`\n\n{}",
+                resolved.current_value, resolved.contextual_type_name, values
+            ),
+        }),
+        range: Some(resolved.range),
+    })
+}
+struct WorkerProcess {
+    _child: Child,
+    stdin: ChildStdin,
+    stdout: BufReader<ChildStdout>,
+    next_id: u64,
+}
+struct CompilerWorker {
+    process: Mutex<WorkerProcess>,
+}
+impl CompilerWorker {
+    fn start(root: &Path) -> Result<Self> {
+        let script = std::env::temp_dir().join(format!(
+            "unionbreeze-ts-worker-{}.cjs",
+            env!("CARGO_PKG_VERSION")
+        ));
+        fs::write(
+            &script,
+            include_str!("../../../typescript-worker/worker.cjs"),
+        )?;
+        let node = std::env::var_os("UNIONBREEZE_NODE").unwrap_or_else(|| "node".into());
+        let mut child = Command::new(node)
+            .arg(script)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .context("start Node.js TypeScript compiler worker")?;
+        let stdin = child.stdin.take().context("worker stdin")?;
+        let stdout = BufReader::new(child.stdout.take().context("worker stdout")?);
+        let worker = Self {
+            process: Mutex::new(WorkerProcess {
+                _child: child,
+                stdin,
+                stdout,
+                next_id: 1,
+            }),
+        };
+        worker.request("initialize", serde_json::json!({"root":root}))?;
+        Ok(worker)
     }
-    Some(DocumentUnionsResponse {
-        version: file.version,
-        generation: snap.generation,
-        literals,
-    })
-}
-fn resolve_result(project: &Project, uri: &Url, position: Position) -> Option<ResolvedLiteral> {
-    let path = uri_path(uri)?;
-    let snap = project.snapshot();
-    let file = snap.files.get(&path)?;
-    let offset = unionbreeze_protocol::position_to_offset(&file.text, position)?;
-    convert(&snap, &project.resolve_at(&path, offset)?)
-}
-fn convert(snap: &unionbreeze_core::Snapshot, r: &ResolvedUsage) -> Option<ResolvedLiteral> {
-    let domain_file = snap.files.get(&r.domain.path)?;
-    let source = snap.files.get(&r.path)?;
-    let members = members(snap, &r.domain.members);
-    Some(ResolvedLiteral {
-        range: span_to_range(&source.text, r.usage.span),
-        kind: LiteralKind::Usage,
-        current_value: r.usage.value.clone(),
-        contextual_type_name: r.domain.type_name.clone(),
-        domain: Location {
-            uri: domain_file.uri.clone(),
-            range: span_to_range(&domain_file.text, r.domain.name_span),
-        },
-        declared_members: members.clone(),
-        assignable_members: members,
-    })
-}
-fn members(
-    snap: &unionbreeze_core::Snapshot,
-    input: &[unionbreeze_core::ResolvedMember],
-) -> Vec<Member> {
-    input
-        .iter()
-        .filter_map(|m| {
-            let f = snap.files.get(&m.path)?;
-            Some(Member {
-                value: m.value.clone(),
-                declaration: Location {
-                    uri: f.uri.clone(),
-                    range: span_to_range(&f.text, m.span),
-                },
-                deprecated: false,
-                declaration_order: m.order,
-            })
-        })
-        .collect()
-}
-fn uri_path(uri: &Url) -> Option<PathBuf> {
-    uri.to_file_path()
-        .ok()
-        .map(|p| p.canonicalize().unwrap_or(p))
+    fn update(&self, uri: &Url, version: i32, text: &str) -> Result<()> {
+        self.request(
+            "update",
+            serde_json::json!({"uri":uri,"version":version,"text":text}),
+        )
+        .map(|_| ())
+    }
+    fn request(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<Option<serde_json::Value>> {
+        let mut process = self
+            .process
+            .lock()
+            .map_err(|_| anyhow!("compiler worker lock poisoned"))?;
+        let id = process.next_id;
+        process.next_id += 1;
+        serde_json::to_writer(
+            &mut process.stdin,
+            &serde_json::json!({"id":id,"method":method,"params":params}),
+        )?;
+        process.stdin.write_all(b"\n")?;
+        process.stdin.flush()?;
+        let mut line = String::new();
+        process.stdout.read_line(&mut line)?;
+        let response: serde_json::Value =
+            serde_json::from_str(&line).context("invalid compiler worker response")?;
+        if let Some(error) = response.get("error") {
+            return Err(anyhow!("{error}"));
+        }
+        Ok(response.get("result").cloned().filter(|x| !x.is_null()))
+    }
 }
 fn log(message: &str) {
     if std::env::var_os("UNIONBREEZE_LOG").is_some() || std::env::var_os("RUST_LOG").is_some() {

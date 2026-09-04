@@ -7,7 +7,6 @@ license.workspace = true
 [dependencies]
 lsp-types.workspace = true
 serde.workspace = true
-unionbreeze-typescript = { path = "../unionbreeze-typescript" }
 
 [lints]
 workspace = true

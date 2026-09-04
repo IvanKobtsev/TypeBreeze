@@ -10,13 +10,12 @@ TypeScript service, or reflective API is used by the shipping adapter.
 
 ## Boundary
 
-`unionbreeze-typescript` extracts owned semantic facts from TypeScript source.
-`unionbreeze-core` atomically replaces per-file contributions and resolves
-finite domains. `unionbreeze-protocol` is the editor-neutral JSON/LSP contract,
-including UTF-16 conversion. `unionbreeze-lsp` owns synchronization, workspace
-indexing, and the two custom requests. The code in `editors/intellij` only
-starts the server, translates editor positions, displays the closed popup, and
-performs an undoable token-content replacement.
+`unionbreeze-lsp` owns synchronization and supervises an embedded JavaScript
+worker. That worker loads the workspace's TypeScript compiler, builds an
+incremental `Program`, and calls `TypeChecker.getContextualType()` for string
+literals. Rust validates and transports the results through the editor-neutral
+protocol. The code in `editors/intellij` only starts the server, caches document
+results, displays the closed popup, and performs an undoable replacement.
 
 The protocol is deliberately independent of JetBrains classes so a later VS
 Code adapter can consume it unchanged.
