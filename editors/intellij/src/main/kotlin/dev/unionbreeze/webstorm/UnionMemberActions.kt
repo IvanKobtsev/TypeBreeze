@@ -29,7 +29,6 @@ import com.intellij.codeInsight.daemon.DaemonCodeAnalyzer
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import org.eclipse.lsp4j.Position
-import org.eclipse.lsp4j.TextDocumentPositionParams
 
 class ChangeUnionMemberAction:AnAction(){
     override fun getActionUpdateThread()=ActionUpdateThread.BGT
@@ -47,7 +46,7 @@ private fun requestAndShow(project:Project,editor:Editor,file:VirtualFile,notify
     val document=editor.document;val stamp=document.modificationStamp;val position=document.position(editor.caretModel.offset)
     AppExecutorUtil.getAppExecutorService().execute {
         val clients=LspClientManager.getInstance(project).getClients(UnionBreezeLspProvider::class.java).filter{it.descriptor.isSupportedFile(file)}
-        val resolved=clients.firstNotNullOfOrNull { client -> runCatching { client.sendRequestSync(1_500){server->(server as UnionBreezeLanguageServer).resolveLiteral(TextDocumentPositionParams(client.getDocumentIdentifier(file),position))} }.getOrNull() }
+        val resolved=clients.firstNotNullOfOrNull { client -> runCatching { client.sendRequestSync(1_500){server->(server as UnionBreezeLanguageServer).resolveLiteral(ResolveLiteralParams(client.getDocumentIdentifier(file),position,document.text,stamp))} }.getOrNull() }
         ApplicationManager.getApplication().invokeLater {
             if(document.modificationStamp!=stamp)return@invokeLater
             if(resolved==null||resolved.kind!="usage"||resolved.assignableMembers.size<2){if(notify)NotificationGroupManager.getInstance().getNotificationGroup("UnionBreeze").createNotification("No closed string union is available here.",NotificationType.INFORMATION).notify(project);return@invokeLater}
@@ -88,6 +87,6 @@ class UnionCache(private val project:Project){
     }
     fun matching(file:VirtualFile,document:Document,range:TextRange)=entries[file.url]?.takeIf{it.stamp==document.modificationStamp}?.literals?.firstOrNull{document.offset(it.range.start)==range.startOffset&&document.offset(it.range.end)==range.endOffset}
     fun refresh(file:VirtualFile){if(refreshing.add(file.url))scheduleRefresh(file,0)}
-    private fun scheduleRefresh(file:VirtualFile,attempt:Int){AppExecutorUtil.getAppScheduledExecutorService().schedule({val document=ReadAction.compute<Document?,RuntimeException>{FileDocumentManager.getInstance().getDocument(file)};if(document==null){refreshing.remove(file.url);return@schedule};val stamp=document.modificationStamp;val clients=LspClientManager.getInstance(project).getClients(UnionBreezeLspProvider::class.java).filter{it.descriptor.isSupportedFile(file)};if(clients.isEmpty()){if(attempt<5)scheduleRefresh(file,attempt+1)else refreshing.remove(file.url);return@schedule};val response=clients.firstNotNullOfOrNull{client->runCatching{client.sendRequestSync(15_000){server->(server as UnionBreezeLanguageServer).documentUnions(DocumentUnionsParams(client.getDocumentIdentifier(file)))}}.onFailure{LOG.warn("documentUnions failed for ${file.path}",it)}.getOrNull()};if(response!=null&&document.modificationStamp==stamp){entries[file.url]=Entry(stamp,response.literals);refreshing.remove(file.url);ApplicationManager.getApplication().invokeLater{DaemonCodeAnalyzer.getInstance(project).restart()}}else if(attempt<5)scheduleRefresh(file,attempt+1)else refreshing.remove(file.url)},if(attempt==0)750 else 1_000,TimeUnit.MILLISECONDS)}
+    private fun scheduleRefresh(file:VirtualFile,attempt:Int){AppExecutorUtil.getAppScheduledExecutorService().schedule({val document=ReadAction.compute<Document?,RuntimeException>{FileDocumentManager.getInstance().getDocument(file)};if(document==null){refreshing.remove(file.url);return@schedule};val stamp=document.modificationStamp;val text=document.text;val clients=LspClientManager.getInstance(project).getClients(UnionBreezeLspProvider::class.java).filter{it.descriptor.isSupportedFile(file)};if(clients.isEmpty()){if(attempt<5)scheduleRefresh(file,attempt+1)else refreshing.remove(file.url);return@schedule};val response=clients.firstNotNullOfOrNull{client->runCatching{client.sendRequestSync(15_000){server->(server as UnionBreezeLanguageServer).documentUnions(DocumentUnionsParams(client.getDocumentIdentifier(file),text,stamp))}}.onFailure{LOG.warn("documentUnions failed for ${file.path}",it)}.getOrNull()};if(response!=null&&response.clientVersion==stamp&&document.modificationStamp==stamp){entries[file.url]=Entry(stamp,response.literals);refreshing.remove(file.url);ApplicationManager.getApplication().invokeLater{DaemonCodeAnalyzer.getInstance(project).restart()}}else if(attempt<5)scheduleRefresh(file,attempt+1)else refreshing.remove(file.url)},if(attempt==0)300 else 500,TimeUnit.MILLISECONDS)}
     companion object { private val LOG=Logger.getInstance(UnionCache::class.java) }
 }

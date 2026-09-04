@@ -6,8 +6,7 @@ const { pathToFileURL, fileURLToPath } = require('url');
 let root = process.cwd();
 const overlays = new Map();
 let ts;
-let cachedProgram;
-let dirty = true;
+let languageService;
 
 function loadTypeScript() {
   if (ts) return ts;
@@ -22,8 +21,7 @@ function position(source, offset) {
 function range(source, start, end) { return { start: position(source, start), end: position(source, end) }; }
 function offset(source, point) { return source.getPositionOfLineAndCharacter(point.line, point.character); }
 function uri(file) { return pathToFileURL(path.resolve(file)).href; }
-function createProgram() {
-  if (!dirty && cachedProgram) return cachedProgram;
+function createLanguageService() {
   const T = loadTypeScript();
   const config = T.findConfigFile(root, T.sys.fileExists, 'tsconfig.json');
   let names, options;
@@ -31,18 +29,27 @@ function createProgram() {
     const parsed = T.parseJsonConfigFileContent(T.readConfigFile(config, T.sys.readFile).config, T.sys, path.dirname(config));
     names = parsed.fileNames; options = parsed.options;
   } else { names = [...overlays.keys()]; options = { allowJs: false, jsx: T.JsxEmit.Preserve, moduleResolution: T.ModuleResolutionKind.Bundler }; }
-  for (const file of overlays.keys()) if (!names.includes(file)) names.push(file);
-  const host = T.createCompilerHost(options, true);
-  const original = host.getSourceFile.bind(host);
-  host.getSourceFile = (name, language, onError, fresh) => overlays.has(path.resolve(name))
-    ? T.createSourceFile(name, overlays.get(path.resolve(name)).text, language, true)
-    : original(name, language, onError, fresh);
-  host.readFile = name => overlays.get(path.resolve(name))?.text ?? T.sys.readFile(name);
-  host.fileExists = name => overlays.has(path.resolve(name)) || T.sys.fileExists(name);
-  cachedProgram = T.createProgram(names, options, host, cachedProgram);
-  dirty = false;
-  return cachedProgram;
+  const host = {
+    getCompilationSettings: () => options,
+    getScriptFileNames: () => [...new Set([...names, ...overlays.keys()])],
+    getScriptVersion: name => String(overlays.get(path.resolve(name))?.version ?? statVersion(name)),
+    getScriptSnapshot: name => { const text=overlays.get(path.resolve(name))?.text ?? T.sys.readFile(name);return text===undefined?undefined:T.ScriptSnapshot.fromString(text); },
+    getCurrentDirectory: () => root,
+    getDefaultLibFileName: value => T.getDefaultLibFilePath(value),
+    fileExists: T.sys.fileExists,
+    readFile: T.sys.readFile,
+    readDirectory: T.sys.readDirectory,
+    directoryExists: T.sys.directoryExists,
+    getDirectories: T.sys.getDirectories,
+    realpath: T.sys.realpath,
+    useCaseSensitiveFileNames: () => T.sys.useCaseSensitiveFileNames,
+    getNewLine: () => T.sys.newLine,
+  };
+  return T.createLanguageService(host, T.createDocumentRegistry());
 }
+function statVersion(name) { try { return fs.statSync(name).mtimeMs; } catch { return 0; } }
+function createProgram() { if(!languageService)languageService=createLanguageService();return languageService.getProgram(); }
+function syncParams(params){if(params.text===undefined)return;const file=path.resolve(fileURLToPath(params.textDocument.uri));const version=params.clientVersion??params.version??0;const old=overlays.get(file);if(!old||old.version!==version||old.text!==params.text)overlays.set(file,{text:params.text,version});}
 function enclosingString(T, source, at) {
   let found;
   function visit(node) { if (at >= node.getStart(source) && at <= node.getEnd()) { if (T.isStringLiteralLike(node)) found = node; T.forEachChild(node, visit); } }
@@ -108,29 +115,32 @@ function declarationNode(program, source, node) {
   if(!values.includes(node.text))return null;return{range:range(source,node.getStart(source),node.getEnd()),kind:'declaration',currentValue:node.text,contextualTypeName:alias.name.text,domain,declaredMembers:declarations,assignableMembers:[]};
 }
 function resolve(params) {
+  syncParams(params);
   const program = createProgram(); const file = path.resolve(fileURLToPath(params.textDocument.uri));
   const source = program.getSourceFile(file); if (!source) return null;
   const node = enclosingString(loadTypeScript(), source, offset(source, params.position));
   return node ? resolveNode(program, source, node) : null;
 }
 function documentUnions(params) {
+  syncParams(params);
   const program = createProgram(); const file = path.resolve(fileURLToPath(params.textDocument.uri));
   const source = program.getSourceFile(file); if (!source) return null;
   const literals = []; const T = loadTypeScript();
   const visit = node => { if (T.isStringLiteralLike(node)) { const item = declarationNode(program,source,node)||resolveNode(program, source, node); if (item) literals.push(item); } T.forEachChild(node, visit); };
-  visit(source); return { version: overlays.get(file)?.version ?? null, generation: Date.now(), literals };
+  visit(source); return { version: null, clientVersion: params.clientVersion ?? null, generation: Date.now(), literals };
 }
 function navigationTargets(params){
   const program=createProgram();const file=path.resolve(fileURLToPath(params.textDocument.uri));const source=program.getSourceFile(file);if(!source)return[];const T=loadTypeScript();const node=enclosingString(T,source,offset(source,params.position));if(!node)return[];
   const usage=resolveNode(program,source,node);if(usage){const member=usage.declaredMembers.find(item=>item.value===usage.currentValue);return member?[member.declaration]:[];}
   const declaration=declarationNode(program,source,node);if(!declaration)return[];const targets=[];
   const sameRange=(left,right)=>left.start.line===right.start.line&&left.start.character===right.start.character&&left.end.line===right.end.line&&left.end.character===right.end.character;
-  for(const candidateSource of program.getSourceFiles()){if(candidateSource.isDeclarationFile)continue;const visit=child=>{if(T.isStringLiteralLike(child)){const item=resolveNode(program,candidateSource,child);if(item&&item.currentValue===declaration.currentValue&&item.domain.uri===declaration.domain.uri&&sameRange(item.domain.range,declaration.domain.range))targets.push({uri:uri(candidateSource.fileName),range:item.range});}T.forEachChild(child,visit);};visit(candidateSource);}
+  const canPrefilter=/^[\w .:/-]+$/.test(declaration.currentValue);
+  for(const candidateSource of program.getSourceFiles()){if(candidateSource.isDeclarationFile||(canPrefilter&&!candidateSource.text.includes(declaration.currentValue)))continue;const visit=child=>{if(T.isStringLiteralLike(child)&&child.text===declaration.currentValue){const item=resolveNode(program,candidateSource,child);if(item&&item.domain.uri===declaration.domain.uri&&sameRange(item.domain.range,declaration.domain.range))targets.push({uri:uri(candidateSource.fileName),range:item.range});}T.forEachChild(child,visit);};visit(candidateSource);}
   return targets;
 }
 async function handle(message) {
-  if (message.method === 'initialize') { root = path.resolve(message.params.root); loadTypeScript(); return true; }
-  if (message.method === 'update') { const file = path.resolve(fileURLToPath(message.uri)); overlays.set(file, { text: message.text, version: message.version }); dirty = true; return true; }
+  if (message.method === 'initialize') { root = path.resolve(message.params.root); loadTypeScript(); languageService=createLanguageService(); return true; }
+  if (message.method === 'update') { const file = path.resolve(fileURLToPath(message.uri)); overlays.set(file, { text: message.text, version: message.version }); return true; }
   if (message.method === 'documentUnions') return documentUnions(message.params);
   if (message.method === 'resolveLiteral') return resolve(message.params);
   if (message.method === 'navigationTargets') return navigationTargets(message.params);

@@ -7,7 +7,7 @@ plugins {
     id("org.jetbrains.intellij.platform") version "2.18.1"
 }
 group = "dev.unionbreeze"
-version = "0.4.0"
+version = "0.4.1"
 repositories { mavenCentral(); intellijPlatform { defaultRepositories() } }
 dependencies {
     intellijPlatform { webstorm("2026.2.1"); bundledPlugin("JavaScript"); testFramework(TestFrameworkType.Platform) }

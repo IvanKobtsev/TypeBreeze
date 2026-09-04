@@ -5,11 +5,22 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase")]
 pub struct DocumentUnionsParams {
     pub text_document: lsp_types::TextDocumentIdentifier,
+    pub text: String,
+    pub client_version: i64,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolveLiteralParams {
+    pub text_document: lsp_types::TextDocumentIdentifier,
+    pub position: lsp_types::Position,
+    pub text: String,
+    pub client_version: i64,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DocumentUnionsResponse {
     pub version: Option<i32>,
+    pub client_version: Option<i64>,
     pub generation: u64,
     pub literals: Vec<ResolvedLiteral>,
 }
