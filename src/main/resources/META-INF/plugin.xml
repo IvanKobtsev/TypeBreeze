@@ -1,0 +1,29 @@
+<idea-plugin>
+  <id>dev.unionbreeze.webstorm</id>
+  <name>UnionBreeze</name>
+  <vendor url="https://github.com/IvanKobtsev/UnionBreeze">Ivan Kobtsev</vendor>
+  <description><![CDATA[
+    Give TypeScript unions first-class IDE support with a dedicated closed-set member switcher.
+  ]]></description>
+
+  <depends>com.intellij.modules.platform</depends>
+  <depends>JavaScript</depends>
+
+  <extensions defaultExtensionNs="com.intellij">
+    <intentionAction>
+      <language>TypeScript</language>
+      <className>dev.unionbreeze.webstorm.ChangeUnionMemberIntention</className>
+      <category>TypeScript</category>
+    </intentionAction>
+  </extensions>
+
+  <actions>
+    <action
+        id="dev.unionbreeze.webstorm.ChangeUnionMember"
+        class="dev.unionbreeze.webstorm.ChangeUnionMemberAction"
+        text="Change Union Member"
+        description="Choose another value from the contextual TypeScript string union">
+      <keyboard-shortcut keymap="$default" first-keystroke="alt shift U"/>
+    </action>
+  </actions>
+</idea-plugin>
