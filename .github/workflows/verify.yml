@@ -60,7 +60,22 @@ jobs:
         with: { gradle-version: "9.4.1" }
       - run: gradle -p editors/intellij test buildPlugin verifyPlugin
       - name: Verify bundled servers
-        run: for p in windows-x64 windows-arm64 macos-x64 macos-arm64 linux-x64 linux-arm64; do unzip -l editors/intellij/build/distributions/*.zip | grep "bin/$p/unionbreeze"; done
+        run: |
+          plugin_zip=$(find editors/intellij/build/distributions -maxdepth 1 -name '*.zip' -print -quit)
+          test -n "$plugin_zip"
+          mkdir -p build/plugin-contents
+          unzip -q "$plugin_zip" -d build/plugin-contents
+          : > build/plugin-entries.txt
+          while IFS= read -r plugin_jar; do
+            unzip -Z1 "$plugin_jar" >> build/plugin-entries.txt
+          done < <(find build/plugin-contents -name '*.jar' -print)
+          for platform in windows-x64 windows-arm64 macos-x64 macos-arm64 linux-x64 linux-arm64; do
+            binary=unionbreeze
+            case "$platform" in
+              windows-*) binary=unionbreeze.exe ;;
+            esac
+            grep -Fx "bin/$platform/$binary" build/plugin-entries.txt
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: unionbreeze-webstorm-plugin
