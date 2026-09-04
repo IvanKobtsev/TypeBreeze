@@ -12,6 +12,7 @@ distribution and are not annotated `ApiStatus.Internal`,
 - `ExpectedTypeEvaluator(PsiElement, JSExpectedTypeKind)` and
   `findExpectedType()`
 - `JSType` and `JSType.getSourceElement()`
+- `JSType.substitute()`
 - `JSUnionOrIntersectionType`, `isUnionType()`, and `getTypes()`
 - `JSPrimitiveLiteralType` and `getLiteral()`
 - TypeScript literal-union and type-alias PSI interfaces

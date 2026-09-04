@@ -1,5 +1,5 @@
 <idea-plugin>
-  <id>dev.unionbreeze.webstorm</id>
+  <id>dev.unionbreeze</id>
   <name>UnionBreeze</name>
   <vendor url="https://github.com/IvanKobtsev/UnionBreeze">Ivan Kobtsev</vendor>
   <description><![CDATA[

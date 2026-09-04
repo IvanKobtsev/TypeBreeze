@@ -11,6 +11,6 @@ class UnionMemberSwitcherTest {
 
     @Test
     fun preservesDoubleQuoteByEscapingContent() {
-        assertEquals("say \\"hello\\"", UnionMemberSwitcher.escape("say \"hello\"", '"'))
+        assertEquals("say \\\"hello\\\"", UnionMemberSwitcher.escape("say \"hello\"", '"'))
     }
 }

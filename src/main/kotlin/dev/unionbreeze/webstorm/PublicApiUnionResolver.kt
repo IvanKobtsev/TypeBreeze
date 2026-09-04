@@ -26,7 +26,7 @@ class PublicApiUnionResolver(private val project: Project) : UnionResolver {
         if (!literal.isValid || !literal.isStringLiteral) return null
         val currentValue = literal.value as? String ?: return null
         val expectedType = ExpectedTypeEvaluator(literal, JSExpectedTypeKind.EXPECTED).findExpectedType() ?: return null
-        val normalizedType = expectedType.substitute(literal)
+        val normalizedType = expectedType.substitute()
         val members = extractClosedStringUnion(normalizedType)
             ?: extractClosedStringUnion(expectedType)
             ?: return null
