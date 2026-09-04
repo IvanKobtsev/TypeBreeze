@@ -8,12 +8,15 @@ import com.intellij.lang.javascript.psi.ecma6.TypeScriptTypeAlias
 import com.intellij.lang.javascript.psi.types.JSPrimitiveLiteralType
 import com.intellij.lang.javascript.psi.types.JSUnionOrIntersectionType
 import com.intellij.openapi.components.Service
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiElement
 import com.intellij.psi.SmartPointerManager
 
 @Service(Service.Level.PROJECT)
 class PublicApiUnionResolver(private val project: Project) : UnionResolver {
+    private val log = Logger.getInstance(PublicApiUnionResolver::class.java)
+
     override suspend fun resolveLiteral(
         literal: JSLiteralExpression,
         mode: ResolutionMode,
@@ -23,14 +26,41 @@ class PublicApiUnionResolver(private val project: Project) : UnionResolver {
         literal: JSLiteralExpression,
         mode: ResolutionMode,
     ): ResolvedLiteralUnion? {
-        if (!literal.isValid || !literal.isStringLiteral) return null
-        val currentValue = literal.value as? String ?: return null
-        val expectedType = ExpectedTypeEvaluator(literal, JSExpectedTypeKind.EXPECTED).findExpectedType() ?: return null
+        if (!literal.isValid || !literal.isStringLiteral) {
+            log.debug("Rejected invalid or non-string literal")
+            return null
+        }
+        val currentValue = literal.value as? String
+        if (currentValue == null) {
+            log.debug("Rejected string literal with a non-string PSI value: ${literal.text}")
+            return null
+        }
+        val expectedType = ExpectedTypeEvaluator(literal, JSExpectedTypeKind.EXPECTED).findExpectedType()
+        if (expectedType == null) {
+            log.info(
+                "ExpectedTypeEvaluator returned null: file=${literal.containingFile?.virtualFile?.path}, " +
+                    "offset=${literal.textOffset}, literal=${literal.text}, parent=${literal.parent?.javaClass?.name}",
+            )
+            return null
+        }
+        log.info(
+            "Expected type: text=${expectedType.typeText}, class=${expectedType.javaClass.name}, " +
+                "source=${expectedType.sourceElement?.javaClass?.name}@${expectedType.sourceElement?.textOffset}",
+        )
         val normalizedType = expectedType.substitute()
         val members = extractClosedStringUnion(normalizedType)
             ?: extractClosedStringUnion(expectedType)
-            ?: return null
-        if (members.size !in 2..MAX_MEMBERS || members.none { it.value == currentValue }) return null
+        if (members == null) {
+            log.info(
+                "Expected type is not a closed string union: normalizedText=${normalizedType.typeText}, " +
+                    "normalizedClass=${normalizedType.javaClass.name}",
+            )
+            return null
+        }
+        if (members.size !in 2..MAX_MEMBERS || members.none { it.value == currentValue }) {
+            log.info("Rejected member set: current=$currentValue, members=${members.map { it.value }}")
+            return null
+        }
 
         val pointerManager = SmartPointerManager.getInstance(project)
         val originElement = expectedType.sourceElement ?: normalizedType.sourceElement

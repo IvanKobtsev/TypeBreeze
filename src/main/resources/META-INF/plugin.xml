@@ -15,6 +15,7 @@
       <className>dev.unionbreeze.webstorm.ChangeUnionMemberIntention</className>
       <category>TypeScript</category>
     </intentionAction>
+    <notificationGroup id="UnionBreeze" displayType="BALLOON"/>
   </extensions>
 
   <actions>
@@ -24,6 +25,7 @@
         text="Change Union Member"
         description="Choose another value from the contextual TypeScript string union">
       <keyboard-shortcut keymap="$default" first-keystroke="alt shift U"/>
+      <add-to-group group-id="EditorPopupMenu" anchor="last"/>
     </action>
   </actions>
 </idea-plugin>
