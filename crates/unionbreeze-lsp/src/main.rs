@@ -4,10 +4,11 @@ use lsp_types::notification::Notification as LspNotification;
 use lsp_types::request::Request as LspRequest;
 use lsp_types::{
     DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams, Hover,
-    HoverContents, HoverParams, InitializeParams, MarkupContent, MarkupKind, ServerCapabilities,
-    TextDocumentPositionParams, TextDocumentSyncCapability, TextDocumentSyncKind,
+    HoverContents, HoverParams, InitializeParams, MarkupContent, MarkupKind, OneOf,
+    ServerCapabilities, TextDocumentPositionParams, TextDocumentSyncCapability,
+    TextDocumentSyncKind,
     notification::{DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, Exit},
-    request::HoverRequest,
+    request::{GotoDefinition, HoverRequest},
 };
 use std::{
     fs,
@@ -24,6 +25,7 @@ fn main() -> Result<()> {
     let init = ServerCapabilities {
         text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)),
         hover_provider: Some(lsp_types::HoverProviderCapability::Simple(true)),
+        definition_provider: Some(OneOf::Left(true)),
         ..Default::default()
     };
     let params: InitializeParams =
@@ -96,6 +98,10 @@ fn handle_request(connection: &Connection, worker: &CompilerWorker, req: Request
             .ok()
             .and_then(|p| hover_result(worker, &p.text_document_position_params))
             .and_then(|x| serde_json::to_value(x).ok()),
+        GotoDefinition::METHOD => worker
+            .request("navigationTargets", req.params)
+            .ok()
+            .flatten(),
         _ => None,
     };
     let response = if let Some(value) = result {

@@ -4,6 +4,13 @@ UnionBreeze gives finite TypeScript string unions a dedicated closed-set member
 switcher in WebStorm. Place the caret on a contextually typed string literal and
 invoke **Change Union Member** through Alt+Enter or **Alt+Shift+U**.
 
+Union members are styled separately from ordinary string literals. Declaration
+and usage styling can be enabled independently under **Settings | UnionBreeze**,
+and their colors/effects are configured under **Editor | Color Scheme |
+UnionBreeze**. Standard **Go to Declaration** navigation goes from a usage to
+its exact member declaration and from a declaration to its matching usages;
+WebStorm supplies its normal multi-target popup and source preview.
+
 TypeScript semantics are provided by an editor-neutral Rust language server,
 which supervises a bundled compiler worker using the project's TypeScript
 installation. The worker asks TypeScript directly for each literal's contextual

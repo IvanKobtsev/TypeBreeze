@@ -34,6 +34,12 @@ function request(method, params) { return new Promise((resolve, reject) => { con
   assert.equal(target.contextualTypeName, 'ToastStyleType');
   assert.deepEqual(target.assignableMembers.map(member => member.value), ['normal', 'wide']);
   assert(target.domain.uri.endsWith('/types.ts'));
+  const toDeclaration = await request('navigationTargets', { textDocument: { uri: pathToFileURL(usagePath).href }, position: { line: 1, character: 42 } });
+  assert.equal(toDeclaration.length, 1); assert(toDeclaration[0].uri.endsWith('/types.ts'));
+  const fromDeclaration = await request('navigationTargets', { textDocument: { uri: pathToFileURL(path.join(root, 'types.ts')).href }, position: { line: 1, character: 46 } });
+  assert.equal(fromDeclaration.length, 1); assert(fromDeclaration[0].uri.endsWith('/usage.ts'));
+  const document = await request('documentUnions', { textDocument: { uri: pathToFileURL(path.join(root, 'types.ts')).href } });
+  assert(document.literals.some(literal => literal.kind === 'declaration' && literal.currentValue === 'wide'));
   const ordinary = await request('resolveLiteral', { textDocument: { uri: pathToFileURL(usagePath).href }, position: { line: 2, character: 20 } });
   assert.equal(ordinary, null);
   child.kill(); fs.rmSync(root, { recursive: true, force: true });

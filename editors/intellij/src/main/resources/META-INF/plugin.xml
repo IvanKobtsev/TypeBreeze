@@ -8,6 +8,9 @@
   <depends>JavaScript</depends>
   <extensions defaultExtensionNs="com.intellij">
     <platform.lsp.integrationProvider implementation="dev.unionbreeze.webstorm.UnionBreezeLspProvider"/>
+    <annotator language="TypeScript" implementationClass="dev.unionbreeze.webstorm.UnionBreezeAnnotator"/>
+    <colorSettingsPage implementation="dev.unionbreeze.webstorm.UnionBreezeColorSettingsPage"/>
+    <applicationConfigurable id="unionbreeze.settings" displayName="UnionBreeze" instance="dev.unionbreeze.webstorm.UnionBreezeConfigurable"/>
     <intentionAction>
       <language>TypeScript</language>
       <className>dev.unionbreeze.webstorm.ChangeUnionMemberIntention</className>
@@ -22,4 +25,3 @@
     </action>
   </actions>
 </idea-plugin>
-
