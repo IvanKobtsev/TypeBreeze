@@ -167,7 +167,7 @@ function renamePlan(params){
 }
 async function handle(message) {
   if (message.method === 'initialize') { root = path.resolve(message.params.root); loadTypeScript(); languageService=createLanguageService(); return true; }
-  if (message.method === 'update') { const file = path.resolve(fileURLToPath(message.uri)); overlays.set(file, { text: message.text, version: message.version }); return true; }
+  if (message.method === 'update') { const file = path.resolve(fileURLToPath(message.params.uri)); overlays.set(file, { text: message.params.text, version: message.params.version }); return true; }
   if (message.method === 'documentUnions') return documentUnions(message.params);
   if (message.method === 'resolveLiteral') return resolve(message.params);
   if (message.method === 'navigationTargets') return navigationTargets(message.params);

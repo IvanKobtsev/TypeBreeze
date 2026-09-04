@@ -66,18 +66,22 @@ fn handle_notification(worker: &CompilerWorker, n: Notification) {
     match n.method.as_str() {
         DidOpenTextDocument::METHOD => {
             if let Ok(p) = serde_json::from_value::<DidOpenTextDocumentParams>(n.params) {
-                let _ = worker.update(
-                    &p.text_document.uri,
-                    p.text_document.version,
-                    &p.text_document.text,
-                );
+                worker
+                    .update(
+                        &p.text_document.uri,
+                        p.text_document.version,
+                        &p.text_document.text,
+                    )
+                    .unwrap_or_else(|error| log(&format!("didOpen update failed: {error:#}")));
             }
         }
         DidChangeTextDocument::METHOD => {
             if let Ok(p) = serde_json::from_value::<DidChangeTextDocumentParams>(n.params)
                 && let Some(change) = p.content_changes.into_iter().last()
             {
-                let _ = worker.update(&p.text_document.uri, p.text_document.version, &change.text);
+                worker
+                    .update(&p.text_document.uri, p.text_document.version, &change.text)
+                    .unwrap_or_else(|error| log(&format!("didChange update failed: {error:#}")));
             }
         }
         DidCloseTextDocument::METHOD => {

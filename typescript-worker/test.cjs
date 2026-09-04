@@ -51,6 +51,15 @@ function request(method, params) { return new Promise((resolve, reject) => { con
   assert.equal(duplicateRename, null);
   const declarationRename = await request('renamePlan', { textDocument: { uri: pathToFileURL(path.join(root, 'types.ts')).href }, position: { line: 1, character: 46 }, newValue: 'expanded' });
   assert.equal(declarationRename.targets.length, 2);
+  const renamedTypes = fs.readFileSync(path.join(root, 'types.ts'), 'utf8').replace("'wide'", "'expanded'");
+  const renamedUsage = usage.replace("'wide'", "'expanded'");
+  await request('update', { uri: pathToFileURL(path.join(root, 'types.ts')).href, text: renamedTypes, version: 3 });
+  await request('update', { uri: pathToFileURL(usagePath).href, text: renamedUsage, version: 3 });
+  const secondRename = await request('renamePlan', { textDocument: { uri: pathToFileURL(usagePath).href }, position: { line: 1, character: 25 }, text: renamedUsage, clientVersion: 3, newValue: 'panoramic' });
+  assert.equal(secondRename.oldValue, 'expanded');
+  assert.equal(secondRename.targets.length, 2);
+  await request('update', { uri: pathToFileURL(path.join(root, 'types.ts')).href, text: fs.readFileSync(path.join(root, 'types.ts'), 'utf8'), version: 4 });
+  await request('update', { uri: pathToFileURL(usagePath).href, text: usage, version: 4 });
   const document = await request('documentUnions', { textDocument: { uri: pathToFileURL(path.join(root, 'types.ts')).href } });
   assert(document.literals.some(literal => literal.kind === 'declaration' && literal.currentValue === 'wide'));
   assert.equal(document.literals.find(literal => literal.kind === 'declaration' && literal.currentValue === 'wide').hasUsages, true);
