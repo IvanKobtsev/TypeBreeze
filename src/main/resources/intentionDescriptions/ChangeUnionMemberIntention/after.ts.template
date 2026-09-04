@@ -1,2 +1,0 @@
-type Status = 'draft' | 'published';
-const status: Status = 'published';

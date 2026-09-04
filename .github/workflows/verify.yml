@@ -1,29 +1,68 @@
 name: Verify
-
-on:
-  push:
-  pull_request:
-
-permissions:
-  contents: read
-
+on: [push, pull_request]
+permissions: { contents: read }
 jobs:
-  plugin:
+  rust:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: rustfmt, clippy }
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+  servers:
+    strategy:
+      matrix:
+        include:
+          - { os: windows-latest, target: x86_64-pc-windows-msvc, binary: unionbreeze.exe }
+          - { os: windows-latest, target: aarch64-pc-windows-msvc, binary: unionbreeze.exe }
+          - { os: macos-15-intel, target: x86_64-apple-darwin, binary: unionbreeze }
+          - { os: macos-14, target: aarch64-apple-darwin, binary: unionbreeze }
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu, binary: unionbreeze }
+          - { os: ubuntu-latest, target: aarch64-unknown-linux-gnu, binary: unionbreeze, cross: arm64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: "${{ matrix.target }}" }
+      - if: matrix.cross == 'arm64'
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+      - if: matrix.cross == 'arm64'
+        run: echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+      - run: cargo build --release -p unionbreeze-lsp --target ${{ matrix.target }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: unionbreeze-server-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/${{ matrix.binary }}
+          if-no-files-found: error
+  plugin:
+    needs: [rust, servers]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with: { name: unionbreeze-server-x86_64-pc-windows-msvc, path: editors/intellij/src/main/resources/bin/windows-x64 }
+      - uses: actions/download-artifact@v4
+        with: { name: unionbreeze-server-aarch64-pc-windows-msvc, path: editors/intellij/src/main/resources/bin/windows-arm64 }
+      - uses: actions/download-artifact@v4
+        with: { name: unionbreeze-server-x86_64-apple-darwin, path: editors/intellij/src/main/resources/bin/macos-x64 }
+      - uses: actions/download-artifact@v4
+        with: { name: unionbreeze-server-aarch64-apple-darwin, path: editors/intellij/src/main/resources/bin/macos-arm64 }
+      - uses: actions/download-artifact@v4
+        with: { name: unionbreeze-server-x86_64-unknown-linux-gnu, path: editors/intellij/src/main/resources/bin/linux-x64 }
+      - uses: actions/download-artifact@v4
+        with: { name: unionbreeze-server-aarch64-unknown-linux-gnu, path: editors/intellij/src/main/resources/bin/linux-arm64 }
+      - run: chmod +x editors/intellij/src/main/resources/bin/{macos-x64,macos-arm64,linux-x64,linux-arm64}/unionbreeze
       - uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: "25"
+        with: { distribution: temurin, java-version: "25" }
       - uses: gradle/actions/setup-gradle@v5
-        with:
-          gradle-version: "9.4.1"
-      - name: Test and package
-        run: gradle test buildPlugin verifyPlugin
-      - name: Upload WebStorm plugin
-        uses: actions/upload-artifact@v4
+        with: { gradle-version: "9.4.1" }
+      - run: gradle -p editors/intellij test buildPlugin verifyPlugin
+      - name: Verify bundled servers
+        run: for p in windows-x64 windows-arm64 macos-x64 macos-arm64 linux-x64 linux-arm64; do unzip -l editors/intellij/build/distributions/*.zip | grep "bin/$p/unionbreeze"; done
+      - uses: actions/upload-artifact@v4
         with:
           name: unionbreeze-webstorm-plugin
-          path: build/distributions/*.zip
+          path: editors/intellij/build/distributions/*.zip
           if-no-files-found: error

@@ -2,6 +2,8 @@
 .intellijPlatform/
 .kotlin/
 build/
+target/
+editors/intellij/build/
 out/
 *.iml
 .idea/workspace.xml

@@ -1,0 +1,13 @@
+[package]
+name = "unionbreeze-protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+lsp-types.workspace = true
+serde.workspace = true
+unionbreeze-typescript = { path = "../unionbreeze-typescript" }
+
+[lints]
+workspace = true
