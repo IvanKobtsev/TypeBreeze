@@ -64,9 +64,10 @@ private fun replace(project:Project,editor:Editor,file:VirtualFile,resolved:Reso
     val document=editor.document;val start=document.offset(resolved.range.start)?:return;val end=document.offset(resolved.range.end)?:return
     if(start !in 0 until document.textLength||end>document.textLength||end-start<2)return
     val quote=document.charsSequence[start];if(quote!='\''&&quote!='"')return
-    val escaped=buildString { value.forEach{append(when(it){'\\'->"\\\\";quote->"\\$quote";'\n'->"\\n";'\r'->"\\r";'\t'->"\\t";else->it})} }
+    val escaped=escapeUnionMember(value,quote)
     WriteCommandAction.runWriteCommandAction(project,Runnable{document.replaceString(start+1,end-1,escaped)})
 }
+internal fun escapeUnionMember(value:String,quote:Char)=buildString { value.forEach{append(when(it){'\\'->"\\\\";quote->"\\$quote";'\n'->"\\n";'\r'->"\\r";'\t'->"\\t";else->it})} }
 private fun Document.position(offset:Int):Position { val line=getLineNumber(offset);return Position(line,offset-getLineStartOffset(line)) }
 private fun Document.offset(position:Position):Int? { if(position.line<0||position.line>=lineCount)return null;val start=getLineStartOffset(position.line);val end=getLineEndOffset(position.line);var units=0;var i=start;while(i<end&&units<position.character){val pair=Character.isHighSurrogate(charsSequence[i])&&i+1<end&&Character.isLowSurrogate(charsSequence[i+1]);units+=if(pair)2 else 1;i+=if(pair)2 else 1};return if(units==position.character)i else null }
 
@@ -86,6 +87,7 @@ class UnionCache(private val project:Project){
         return entry.literals.firstOrNull{val start=document.offset(it.range.start)?:-2;val end=document.offset(it.range.end)?:-1;it.kind=="usage"&&it.assignableMembers.size>1&&offset in (start+1)..(end-1)}
     }
     fun matching(file:VirtualFile,document:Document,range:TextRange)=entries[file.url]?.takeIf{it.stamp==document.modificationStamp}?.literals?.firstOrNull{document.offset(it.range.start)==range.startOffset&&document.offset(it.range.end)==range.endOffset}
+    fun navigationAt(file:VirtualFile,document:Document,offset:Int)=entries[file.url]?.takeIf{it.stamp==document.modificationStamp}?.literals?.firstOrNull{val start=document.offset(it.range.start)?:-2;val end=document.offset(it.range.end)?:-1;offset in start..end}
     fun refresh(file:VirtualFile){if(refreshing.add(file.url))scheduleRefresh(file,0)}
     private fun scheduleRefresh(file:VirtualFile,attempt:Int){AppExecutorUtil.getAppScheduledExecutorService().schedule({val document=ReadAction.compute<Document?,RuntimeException>{FileDocumentManager.getInstance().getDocument(file)};if(document==null){refreshing.remove(file.url);return@schedule};val stamp=document.modificationStamp;val text=document.text;val clients=LspClientManager.getInstance(project).getClients(UnionBreezeLspProvider::class.java).filter{it.descriptor.isSupportedFile(file)};if(clients.isEmpty()){if(attempt<5)scheduleRefresh(file,attempt+1)else refreshing.remove(file.url);return@schedule};val response=clients.firstNotNullOfOrNull{client->runCatching{client.sendRequestSync(15_000){server->(server as UnionBreezeLanguageServer).documentUnions(DocumentUnionsParams(client.getDocumentIdentifier(file),text,stamp))}}.onFailure{LOG.warn("documentUnions failed for ${file.path}",it)}.getOrNull()};if(response!=null&&response.clientVersion==stamp&&document.modificationStamp==stamp){entries[file.url]=Entry(stamp,response.literals);refreshing.remove(file.url);ApplicationManager.getApplication().invokeLater{DaemonCodeAnalyzer.getInstance(project).restart()}}else if(attempt<5)scheduleRefresh(file,attempt+1)else refreshing.remove(file.url)},if(attempt==0)300 else 500,TimeUnit.MILLISECONDS)}
     companion object { private val LOG=Logger.getInstance(UnionCache::class.java) }

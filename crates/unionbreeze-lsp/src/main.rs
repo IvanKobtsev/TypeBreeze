@@ -4,9 +4,8 @@ use lsp_types::notification::Notification as LspNotification;
 use lsp_types::request::Request as LspRequest;
 use lsp_types::{
     DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams, Hover,
-    HoverContents, HoverParams, InitializeParams, MarkupContent, MarkupKind, OneOf,
-    ServerCapabilities, TextDocumentPositionParams, TextDocumentSyncCapability,
-    TextDocumentSyncKind,
+    HoverContents, HoverParams, InitializeParams, MarkupContent, MarkupKind, ServerCapabilities,
+    TextDocumentPositionParams, TextDocumentSyncCapability, TextDocumentSyncKind,
     notification::{DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, Exit},
     request::{GotoDefinition, HoverRequest},
 };
@@ -25,7 +24,6 @@ fn main() -> Result<()> {
     let init = ServerCapabilities {
         text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)),
         hover_provider: Some(lsp_types::HoverProviderCapability::Simple(true)),
-        definition_provider: Some(OneOf::Left(true)),
         ..Default::default()
     };
     let params: InitializeParams =
@@ -94,6 +92,11 @@ fn handle_request(connection: &Connection, worker: &CompilerWorker, req: Request
     let result = match req.method.as_str() {
         "unionBreeze/documentUnions" => worker.request("documentUnions", req.params).ok().flatten(),
         "unionBreeze/resolveLiteral" => worker.request("resolveLiteral", req.params).ok().flatten(),
+        "unionBreeze/navigationTargets" => worker
+            .request("navigationTargets", req.params)
+            .ok()
+            .flatten(),
+        "unionBreeze/renamePlan" => worker.request("renamePlan", req.params).ok().flatten(),
         HoverRequest::METHOD => serde_json::from_value::<HoverParams>(req.params)
             .ok()
             .and_then(|p| hover_result(worker, &p.text_document_position_params))

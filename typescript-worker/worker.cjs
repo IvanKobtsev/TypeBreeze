@@ -61,6 +61,11 @@ function declarationLocation(T, symbol, fallbackSource, fallbackNode) {
   const source = declaration.getSourceFile();
   return { uri: uri(source.fileName), range: range(source, declaration.getStart(source), declaration.getEnd()) };
 }
+function canonicalSymbol(T, checker, symbol) {
+  const seen=new Set();let current=symbol;
+  while(current&&(current.flags&T.SymbolFlags.Alias)&&!seen.has(current)){seen.add(current);const next=checker.getAliasedSymbol(current);if(!next||next===current)break;current=next;}
+  return current;
+}
 function resolveNode(program, source, node) {
   const T = loadTypeScript();
   if (node.parent && T.isLiteralTypeNode(node.parent)) return null;
@@ -81,6 +86,7 @@ function resolveNode(program, source, node) {
     const declaration = property?.declarations?.find(item => item.type);
     if (declaration?.type && T.isTypeReferenceNode(declaration.type)) alias = checker.getSymbolAtLocation(declaration.type.typeName);
   }
+  alias=canonicalSymbol(T,checker,alias);
   const rendered = checker.typeToString(contextual);
   const inferredName = rendered.split('|').map(x => x.trim()).find(x => /^[A-Za-z_$][\w$]*$/.test(x) && x !== 'undefined' && x !== 'null');
   if (!alias && inferredName) {
@@ -104,7 +110,8 @@ function resolveNode(program, source, node) {
     const visit = child => { if (T.isLiteralTypeNode(child) && T.isStringLiteralLike(child.literal) && values.includes(child.literal.text)) declared.push({ value: child.literal.text, declaration: { uri: uri(child.getSourceFile().fileName), range: range(child.getSourceFile(), child.literal.getStart(), child.literal.getEnd()) }, deprecated: false, declarationOrder: order++ }); else T.forEachChild(child, visit); };
     visit(declaration.type);
   }
-  const members = values.map((value, index) => declared.find(x => x.value === value) || { value, declaration: domain, deprecated: false, declarationOrder: index });
+  const members = [...declared];
+  for (const value of values) if (!members.some(member => member.value === value)) members.push({ value, declaration: domain, deprecated: false, declarationOrder: members.length });
   return { range: range(source, node.getStart(source), node.getEnd()), kind: 'usage', currentValue: node.text, contextualTypeName: typeName, domain, declaredMembers: members, assignableMembers: members };
 }
 function declarationNode(program, source, node) {
@@ -127,9 +134,19 @@ function documentUnions(params) {
   const source = program.getSourceFile(file); if (!source) return null;
   const literals = []; const T = loadTypeScript();
   const visit = node => { if (T.isStringLiteralLike(node)) { const item = declarationNode(program,source,node)||resolveNode(program, source, node); if (item) literals.push(item); } T.forEachChild(node, visit); };
-  visit(source); return { version: null, clientVersion: params.clientVersion ?? null, generation: Date.now(), literals };
+  visit(source);markDeclarationUsages(program,literals);return { version: null, clientVersion: params.clientVersion ?? null, generation: Date.now(), literals };
+}
+function locationKey(location){const value=location.range;return `${location.uri}:${value.start.line}:${value.start.character}:${value.end.line}:${value.end.character}`;}
+function sameLocation(left,right){return locationKey(left)===locationKey(right);}
+function markDeclarationUsages(program,literals){
+  const declarations=literals.filter(item=>item.kind==='declaration');if(!declarations.length)return;
+  const wanted=new Map(declarations.map(item=>[`${locationKey(item.domain)}\0${item.currentValue}`,item]));
+  const values=new Set(declarations.map(item=>item.currentValue));const simple=[...values].filter(value=>/^[\w .:/-]+$/.test(value));const T=loadTypeScript();
+  for(const candidateSource of program.getSourceFiles()){if(candidateSource.isDeclarationFile||(simple.length===values.size&&!simple.some(value=>candidateSource.text.includes(value))))continue;const visit=child=>{if(T.isStringLiteralLike(child)&&values.has(child.text)){const usage=resolveNode(program,candidateSource,child);if(usage){const declaration=wanted.get(`${locationKey(usage.domain)}\0${usage.currentValue}`);if(declaration)declaration.hasUsages=true;}}T.forEachChild(child,visit);};visit(candidateSource);}
+  for(const declaration of declarations)declaration.hasUsages=declaration.hasUsages===true;
 }
 function navigationTargets(params){
+  syncParams(params);
   const program=createProgram();const file=path.resolve(fileURLToPath(params.textDocument.uri));const source=program.getSourceFile(file);if(!source)return[];const T=loadTypeScript();const node=enclosingString(T,source,offset(source,params.position));if(!node)return[];
   const usage=resolveNode(program,source,node);if(usage){const member=usage.declaredMembers.find(item=>item.value===usage.currentValue);return member?[member.declaration]:[];}
   const declaration=declarationNode(program,source,node);if(!declaration)return[];const targets=[];
@@ -138,12 +155,23 @@ function navigationTargets(params){
   for(const candidateSource of program.getSourceFiles()){if(candidateSource.isDeclarationFile||(canPrefilter&&!candidateSource.text.includes(declaration.currentValue)))continue;const visit=child=>{if(T.isStringLiteralLike(child)&&child.text===declaration.currentValue){const item=resolveNode(program,candidateSource,child);if(item&&item.domain.uri===declaration.domain.uri&&sameRange(item.domain.range,declaration.domain.range))targets.push({uri:uri(candidateSource.fileName),range:item.range});}T.forEachChild(child,visit);};visit(candidateSource);}
   return targets;
 }
+function renamePlan(params){
+  syncParams(params);const program=createProgram();const file=path.resolve(fileURLToPath(params.textDocument.uri));const source=program.getSourceFile(file);if(!source)return null;const T=loadTypeScript();const node=enclosingString(T,source,offset(source,params.position));if(!node)return null;
+  const selected=resolveNode(program,source,node)||declarationNode(program,source,node);if(!selected)return null;const oldValue=selected.currentValue;if(params.newValue===oldValue||selected.declaredMembers.some(member=>member.value===params.newValue))return null;
+  const declaration=selected.declaredMembers.find(member=>member.value===oldValue)?.declaration;if(!declaration)return null;const declarationFile=path.resolve(fileURLToPath(declaration.uri));const relative=path.relative(root,declarationFile);if(relative.startsWith('..')||path.isAbsolute(relative))return null;
+  const targets=[];const seen=new Set();const add=(candidateSource,candidateRange)=>{const location={uri:uri(candidateSource.fileName),range:candidateRange};const key=locationKey(location);if(!seen.has(key)){seen.add(key);const start=offset(candidateSource,candidateRange.start);const end=offset(candidateSource,candidateRange.end);targets.push({...location,expectedText:candidateSource.text.slice(start,end)});}};
+  const declarationSource=program.getSourceFile(declarationFile);if(!declarationSource)return null;const declarationStart=offset(declarationSource,declaration.range.start);const declarationEnd=offset(declarationSource,declaration.range.end);const declarationNodeAtRange=enclosingString(T,declarationSource,declarationStart+1);if(!declarationNodeAtRange||declarationNodeAtRange.text!==oldValue||declarationNodeAtRange.getStart(declarationSource)!==declarationStart||declarationNodeAtRange.getEnd()!==declarationEnd)return null;add(declarationSource,declaration.range);
+  const canPrefilter=/^[\w .:/-]+$/.test(oldValue);
+  for(const candidateSource of program.getSourceFiles()){if(candidateSource.isDeclarationFile||(canPrefilter&&!candidateSource.text.includes(oldValue)))continue;const visit=child=>{if(T.isStringLiteralLike(child)&&child.text===oldValue){const usage=resolveNode(program,candidateSource,child);if(usage&&sameLocation(usage.domain,selected.domain))add(candidateSource,usage.range);}T.forEachChild(child,visit);};visit(candidateSource);}
+  return{oldValue,contextualTypeName:selected.contextualTypeName,targets};
+}
 async function handle(message) {
   if (message.method === 'initialize') { root = path.resolve(message.params.root); loadTypeScript(); languageService=createLanguageService(); return true; }
   if (message.method === 'update') { const file = path.resolve(fileURLToPath(message.uri)); overlays.set(file, { text: message.text, version: message.version }); return true; }
   if (message.method === 'documentUnions') return documentUnions(message.params);
   if (message.method === 'resolveLiteral') return resolve(message.params);
   if (message.method === 'navigationTargets') return navigationTargets(message.params);
+  if (message.method === 'renamePlan') return renamePlan(message.params);
   return null;
 }
 readline.createInterface({ input: process.stdin }).on('line', async line => {

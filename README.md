@@ -11,6 +11,12 @@ UnionBreeze**. Standard **Go to Declaration** navigation goes from a usage to
 its exact member declaration and from a declaration to its matching usages;
 WebStorm supplies its normal multi-target popup and source preview.
 
+Use WebStorm's standard **Rename** command (`Shift+F6`) on a union member
+declaration or recognized usage to rename that member across its domain. The
+refactoring changes only literals that TypeScript resolves to the same declared
+union, validates every source token before writing, and applies all files as one
+undoable command. Unrelated identical strings are left untouched.
+
 TypeScript semantics are provided by an editor-neutral Rust language server,
 which supervises a bundled compiler worker using the project's TypeScript
 installation. The worker asks TypeScript directly for each literal's contextual

@@ -14,8 +14,12 @@ interface ToastProps { styleType?: ToastStyleType }
 type ShortHandToastProps = Omit<ToastProps, 'unused'>;
 export function showSuccessToast(message: string, props?: Partial<ShortHandToastProps>) {}
 `);
-const usage = `import { showSuccessToast } from './types';
-showSuccessToast('saved', { styleType: 'wide' });
+fs.writeFileSync(path.join(root, 'hooks.ts'), `import { ToastStyleType } from './types';
+export type Options = { toastStyle?: ToastStyleType };
+export function useHook(options: Options) {}
+`);
+const usage = `import { useHook } from './hooks';
+useHook({ toastStyle: 'wide' });
 const ordinary = 'wide';
 `;
 const usagePath = path.join(root, 'usage.ts');
@@ -29,22 +33,33 @@ function request(method, params) { return new Promise((resolve, reject) => { con
 
 (async () => {
   await request('initialize', { root });
-  const target = await request('resolveLiteral', { textDocument: { uri: pathToFileURL(usagePath).href }, position: { line: 1, character: 42 } });
+  const target = await request('resolveLiteral', { textDocument: { uri: pathToFileURL(usagePath).href }, position: { line: 1, character: 25 } });
   assert.equal(target.currentValue, 'wide');
   assert.equal(target.contextualTypeName, 'ToastStyleType');
   assert.deepEqual(target.assignableMembers.map(member => member.value), ['normal', 'wide']);
   assert(target.domain.uri.endsWith('/types.ts'));
-  const toDeclaration = await request('navigationTargets', { textDocument: { uri: pathToFileURL(usagePath).href }, position: { line: 1, character: 42 } });
-  assert.equal(toDeclaration.length, 1); assert(toDeclaration[0].uri.endsWith('/types.ts'));
+  const toDeclaration = await request('navigationTargets', { textDocument: { uri: pathToFileURL(usagePath).href }, position: { line: 1, character: 25 } });
+  assert.equal(toDeclaration.length, 1); assert(toDeclaration[0].uri.endsWith('/types.ts')); assert.equal(toDeclaration[0].range.start.line, 1);
   const fromDeclaration = await request('navigationTargets', { textDocument: { uri: pathToFileURL(path.join(root, 'types.ts')).href }, position: { line: 1, character: 46 } });
   assert.equal(fromDeclaration.length, 1); assert(fromDeclaration[0].uri.endsWith('/usage.ts'));
+  const rename = await request('renamePlan', { textDocument: { uri: pathToFileURL(usagePath).href }, position: { line: 1, character: 25 }, newValue: 'expanded' });
+  assert.equal(rename.oldValue, 'wide');
+  assert.equal(rename.targets.length, 2);
+  assert(rename.targets.some(target => target.uri.endsWith('/types.ts')));
+  assert(rename.targets.some(target => target.uri.endsWith('/usage.ts') && target.expectedText === "'wide'"));
+  const duplicateRename = await request('renamePlan', { textDocument: { uri: pathToFileURL(usagePath).href }, position: { line: 1, character: 25 }, newValue: 'normal' });
+  assert.equal(duplicateRename, null);
+  const declarationRename = await request('renamePlan', { textDocument: { uri: pathToFileURL(path.join(root, 'types.ts')).href }, position: { line: 1, character: 46 }, newValue: 'expanded' });
+  assert.equal(declarationRename.targets.length, 2);
   const document = await request('documentUnions', { textDocument: { uri: pathToFileURL(path.join(root, 'types.ts')).href } });
   assert(document.literals.some(literal => literal.kind === 'declaration' && literal.currentValue === 'wide'));
-  const changed = usage.replace("styleType: 'wide'", "styleType: 'normal'");
+  assert.equal(document.literals.find(literal => literal.kind === 'declaration' && literal.currentValue === 'wide').hasUsages, true);
+  assert.equal(document.literals.find(literal => literal.kind === 'declaration' && literal.currentValue === 'normal').hasUsages, false);
+  const changed = usage.replace("toastStyle: 'wide'", "toastStyle: 'normal'");
   const changedDocument = await request('documentUnions', { textDocument: { uri: pathToFileURL(usagePath).href }, text: changed, clientVersion: 2 });
   assert.equal(changedDocument.clientVersion, 2);
   assert(changedDocument.literals.some(literal => literal.kind === 'usage' && literal.currentValue === 'normal'));
-  const changedTarget = await request('resolveLiteral', { textDocument: { uri: pathToFileURL(usagePath).href }, position: { line: 1, character: 42 }, text: changed, clientVersion: 2 });
+  const changedTarget = await request('resolveLiteral', { textDocument: { uri: pathToFileURL(usagePath).href }, position: { line: 1, character: 25 }, text: changed, clientVersion: 2 });
   assert.equal(changedTarget.currentValue, 'normal');
   const ordinary = await request('resolveLiteral', { textDocument: { uri: pathToFileURL(usagePath).href }, position: { line: 2, character: 20 } });
   assert.equal(ordinary, null);

@@ -18,6 +18,29 @@ pub struct ResolveLiteralParams {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct RenamePlanParams {
+    pub text_document: lsp_types::TextDocumentIdentifier,
+    pub position: lsp_types::Position,
+    pub text: String,
+    pub client_version: i64,
+    pub new_value: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenamePlan {
+    pub old_value: String,
+    pub contextual_type_name: String,
+    pub targets: Vec<RenameTarget>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameTarget {
+    pub uri: Url,
+    pub range: Range,
+    pub expected_text: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DocumentUnionsResponse {
     pub version: Option<i32>,
     pub client_version: Option<i64>,
@@ -34,6 +57,7 @@ pub struct ResolvedLiteral {
     pub domain: Location,
     pub declared_members: Vec<Member>,
     pub assignable_members: Vec<Member>,
+    pub has_usages: Option<bool>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
