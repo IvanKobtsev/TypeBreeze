@@ -58,6 +58,7 @@ pub struct ResolvedLiteral {
     pub declared_members: Vec<Member>,
     pub assignable_members: Vec<Member>,
     pub has_usages: Option<bool>,
+    pub usage_locations: Vec<Location>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

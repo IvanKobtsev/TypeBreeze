@@ -66,11 +66,18 @@ function canonicalSymbol(T, checker, symbol) {
   while(current&&(current.flags&T.SymbolFlags.Alias)&&!seen.has(current)){seen.add(current);const next=checker.getAliasedSymbol(current);if(!next||next===current)break;current=next;}
   return current;
 }
+function finiteParts(T,type){const parts=type?(type.isUnion()?type.types:[type]):[];const strings=parts.filter(item=>item.flags&T.TypeFlags.StringLiteral);const invalid=parts.filter(item=>!(item.flags&T.TypeFlags.StringLiteral)&&!(item.flags&(T.TypeFlags.Undefined|T.TypeFlags.Null)));return{parts,strings,valid:strings.length>=2&&strings.length<=100&&!invalid.length};}
+function contextualTypeForLiteral(T,checker,node){
+  let contextual=checker.getContextualType(node);if(finiteParts(T,contextual).valid)return contextual;
+  if(T.isPropertyAssignment(node.parent)){const object=node.parent.parent;const objectTypes=[checker.getContextualType(object)];if(T.isCallExpression(object.parent)){const argumentIndex=object.parent.arguments.indexOf(object);const signature=checker.getResolvedSignature(object.parent);const parameter=signature?.parameters[Math.min(argumentIndex,signature.parameters.length-1)];if(parameter){objectTypes.push(checker.getTypeOfSymbolAtLocation(parameter,object));const declaration=parameter.declarations?.find(item=>item.type);if(declaration?.type)objectTypes.push(checker.getTypeFromTypeNode(declaration.type));}}for(let objectType of objectTypes){if(objectType?.flags&T.TypeFlags.TypeParameter)objectType=checker.getBaseConstraintOfType(objectType);const property=objectType?.getProperty(node.parent.name.getText(node.getSourceFile()));if(property){const propertyType=checker.getTypeOfSymbolAtLocation(property,node);if(finiteParts(T,propertyType).valid)return propertyType;}}}
+  if(T.isBinaryExpression(node.parent)&&[T.SyntaxKind.EqualsEqualsEqualsToken,T.SyntaxKind.ExclamationEqualsEqualsToken,T.SyntaxKind.EqualsEqualsToken,T.SyntaxKind.ExclamationEqualsToken].includes(node.parent.operatorToken.kind)){const other=node.parent.left===node?node.parent.right:node.parent.left;const symbol=checker.getSymbolAtLocation(other);let otherType=symbol?.valueDeclaration?checker.getTypeOfSymbolAtLocation(symbol,symbol.valueDeclaration):checker.getTypeAtLocation(other);if(otherType?.flags&T.TypeFlags.TypeParameter)otherType=checker.getBaseConstraintOfType(otherType);if(finiteParts(T,otherType).valid)return otherType;}
+  return contextual;
+}
 function resolveNode(program, source, node) {
   const T = loadTypeScript();
   if (node.parent && T.isLiteralTypeNode(node.parent)) return null;
   const checker = program.getTypeChecker();
-  const contextual = checker.getContextualType(node);
+  const contextual = contextualTypeForLiteral(T,checker,node);
   if (!contextual) return null;
   const parts = contextual.isUnion() ? contextual.types : [contextual];
   const stringParts = parts.filter(type => type.flags & T.TypeFlags.StringLiteral);
@@ -140,9 +147,10 @@ function locationKey(location){const value=location.range;return `${location.uri
 function sameLocation(left,right){return locationKey(left)===locationKey(right);}
 function markDeclarationUsages(program,literals){
   const declarations=literals.filter(item=>item.kind==='declaration');if(!declarations.length)return;
+  for(const declaration of declarations)declaration.usageLocations=[];
   const wanted=new Map(declarations.map(item=>[`${locationKey(item.domain)}\0${item.currentValue}`,item]));
   const values=new Set(declarations.map(item=>item.currentValue));const simple=[...values].filter(value=>/^[\w .:/-]+$/.test(value));const T=loadTypeScript();
-  for(const candidateSource of program.getSourceFiles()){if(candidateSource.isDeclarationFile||(simple.length===values.size&&!simple.some(value=>candidateSource.text.includes(value))))continue;const visit=child=>{if(T.isStringLiteralLike(child)&&values.has(child.text)){const usage=resolveNode(program,candidateSource,child);if(usage){const declaration=wanted.get(`${locationKey(usage.domain)}\0${usage.currentValue}`);if(declaration)declaration.hasUsages=true;}}T.forEachChild(child,visit);};visit(candidateSource);}
+  for(const candidateSource of program.getSourceFiles()){if(candidateSource.isDeclarationFile||(simple.length===values.size&&!simple.some(value=>candidateSource.text.includes(value))))continue;const visit=child=>{if(T.isStringLiteralLike(child)&&values.has(child.text)){const usage=resolveNode(program,candidateSource,child);if(usage){const declaration=wanted.get(`${locationKey(usage.domain)}\0${usage.currentValue}`);if(declaration){declaration.hasUsages=true;const location={uri:uri(candidateSource.fileName),range:usage.range};if(!declaration.usageLocations.some(existing=>sameLocation(existing,location)))declaration.usageLocations.push(location);}}}T.forEachChild(child,visit);};visit(candidateSource);}
   for(const declaration of declarations)declaration.hasUsages=declaration.hasUsages===true;
 }
 function navigationTargets(params){

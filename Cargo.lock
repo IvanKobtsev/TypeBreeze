@@ -353,7 +353,7 @@ checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
 
 [[package]]
 name = "unionbreeze-lsp"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "lsp-server",
@@ -365,7 +365,7 @@ dependencies = [
 
 [[package]]
 name = "unionbreeze-protocol"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "lsp-types",
  "serde",
