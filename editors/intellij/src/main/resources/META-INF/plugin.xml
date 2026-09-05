@@ -17,6 +17,11 @@
     <applicationConfigurable id="unionbreeze.settings" displayName="UnionBreeze" instance="dev.unionbreeze.webstorm.UnionBreezeConfigurable"/>
     <intentionAction>
       <language>TypeScript</language>
+      <className>dev.unionbreeze.webstorm.EnumToUnionIntention</className>
+      <category>TypeScript</category>
+    </intentionAction>
+    <intentionAction>
+      <language>TypeScript</language>
       <className>dev.unionbreeze.webstorm.ChangeUnionMemberIntention</className>
       <category>TypeScript</category>
     </intentionAction>

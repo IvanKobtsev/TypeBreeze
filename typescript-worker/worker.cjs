@@ -182,9 +182,228 @@ async function handle(message) {
   if (message.method === 'resolveLiteral') return resolve(message.params);
   if (message.method === 'navigationTargets') return navigationTargets(message.params);
   if (message.method === 'renamePlan') return renamePlan(message.params);
+  if (message.method === 'enumToUnionPlan') return enumToUnionPlan(message.params);
   return null;
 }
 readline.createInterface({ input: process.stdin }).on('line', async line => {
   let message; try { message = JSON.parse(line); const result = await handle(message); process.stdout.write(JSON.stringify({ id: message.id, result }) + '\n'); }
   catch (error) { process.stdout.write(JSON.stringify({ id: message?.id, error: String(error?.stack || error) }) + '\n'); }
 });
+
+// Plans edits against a snapshot; temporary transformed programs never escape this request.
+function enumToUnionPlan(params) {
+  const T = loadTypeScript();
+  for (const document of params.documents || []) syncParams(document);
+  syncParams(params);
+  const program = createProgram();
+  const checker = program.getTypeChecker();
+  const source = program.getSourceFile(path.resolve(fileURLToPath(params.textDocument.uri)));
+  const fail = (reason, node) => ({ reason, location: node ? { uri: uri(node.getSourceFile().fileName), range: range(node.getSourceFile(), node.getStart(), node.getEnd()) } : null, edits: [], documents: [] });
+  if (!source) return fail('The enum file is not part of the active TypeScript project.');
+  const at = offset(source, params.position);
+  let declaration;
+  const find = node => { if (node.getStart(source) <= at && at < node.getEnd()) { if (T.isEnumDeclaration(node)) declaration = node; T.forEachChild(node, find); } };
+  find(source);
+  if (!declaration) return fail('Place the caret on an enum declaration.');
+  const symbol = checker.getSymbolAtLocation(declaration.name);
+  if (!symbol || symbol.declarations?.length !== 1) return fail('Merged enum or namespace declarations cannot be converted safely.', declaration);
+  if (source.isDeclarationFile || (T.getCombinedModifierFlags(declaration) & T.ModifierFlags.Ambient)) return fail('Ambient enums cannot be replaced with an initialized object.', declaration);
+  const editable = file => { const relative = path.relative(root, path.resolve(file)); return relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative) && !relative.split(path.sep).includes('node_modules'); };
+  if (!editable(source.fileName)) return fail('The enum is outside the editable workspace.', declaration);
+  const canonical = node => canonicalSymbol(T, checker, checker.getSymbolAtLocation(node));
+  const members = new Map();
+  const quote = value => "'" + value.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\r/g, '\\r').replace(/\n/g, '\\n').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029') + "'";
+  for (const member of declaration.members) {
+    if (!T.isIdentifier(member.name) && !T.isStringLiteral(member.name)) return fail('This enum member name cannot be represented as a string union.', member);
+    members.set(checker.getSymbolAtLocation(member.name), member.name.text);
+  }
+  let needsObject = false;
+  let problem;
+  const edits = [];
+  const add = (node, newText, start = node.getStart(), end = node.getEnd()) => {
+    const file = node.getSourceFile();
+    if (!editable(file.fileName) || file.isDeclarationFile) { problem = fail('A reference is outside the editable workspace or in a declaration file.', node); return; }
+    edits.push({ file, start, end, newText });
+  };
+  const isWrite = node => {
+    let current = node;
+    while (T.isParenthesizedExpression(current.parent)) current = current.parent;
+    const parent = current.parent;
+    return (T.isBinaryExpression(parent) && parent.left === current && parent.operatorToken.kind >= T.SyntaxKind.FirstAssignment && parent.operatorToken.kind <= T.SyntaxKind.LastAssignment) ||
+      T.isDeleteExpression(parent) || ((T.isPrefixUnaryExpression(parent) || T.isPostfixUnaryExpression(parent)) && [T.SyntaxKind.PlusPlusToken, T.SyntaxKind.MinusMinusToken].includes(parent.operator));
+  };
+  const isTypeReference = node => {
+    let current = node;
+    while (T.isQualifiedName(current.parent)) current = current.parent;
+    return T.isTypeReferenceNode(current.parent) || T.isExpressionWithTypeArguments(current.parent) || T.isExportSpecifier(current.parent);
+  };
+  const imports = [];
+  const exports = [];
+  for (const file of program.getSourceFiles()) {
+    if (file.isDeclarationFile && !editable(file.fileName)) continue;
+    const visit = node => {
+      if (node === declaration || problem) return;
+      if (T.isImportDeclaration(node)) { imports.push(node); return; }
+      if (T.isExportDeclaration(node)) { exports.push(node); return; }
+      if (T.isImportEqualsDeclaration(node) && canonical(node.name) === symbol) {
+        problem = fail('Import-equals aliases of this enum need manual conversion.', node); return;
+      }
+      const access = T.isPropertyAccessExpression(node) || T.isElementAccessExpression(node) || T.isQualifiedName(node);
+      if (access) {
+        const memberSymbol = canonical(T.isQualifiedName(node) ? node.right : T.isPropertyAccessExpression(node) ? node.name : node);
+        const base = T.isQualifiedName(node) ? node.left : node.expression;
+        let memberName = members.get(memberSymbol);
+        if (T.isElementAccessExpression(node) && canonical(base) === symbol && T.isStringLiteralLike(node.argumentExpression) && [...members.values()].includes(node.argumentExpression.text)) memberName = node.argumentExpression.text;
+        if (memberName !== undefined) {
+          if (isWrite(node)) { problem = fail('Enum member writes cannot be converted to string literals.', node); return; }
+          let target = node;
+          if (T.isTypeReferenceNode(node.parent) || T.isTypeQueryNode(node.parent)) target = node.parent;
+          if (T.isComputedPropertyName(node.parent) && T.isObjectLiteralExpression(node.parent.parent.parent)) {
+            const key = memberName === '__proto__' ? `[${quote(memberName)}]` : T.isIdentifierText(memberName, T.ScriptTarget.Latest) ? memberName : quote(memberName);
+            add(node.parent, key);
+          } else add(target, quote(memberName));
+          return;
+        }
+        if (T.isElementAccessExpression(node) && canonical(base) === symbol) {
+          const type = checker.getTypeAtLocation(node.argumentExpression);
+          if ((type.isUnion() ? type.types : [type]).some(part => part.flags & (T.TypeFlags.NumberLike | T.TypeFlags.Any | T.TypeFlags.Unknown))) {
+            problem = fail('Numeric reverse lookups or unknown enum indexes cannot be preserved by a name-based object.', node); return;
+          }
+        }
+      }
+      if ((T.isIdentifier(node) || access) && canonical(node) === symbol) {
+        if (isWrite(node)) { problem = fail('Writes to the enum object cannot be converted safely.', node); return; }
+        if (!isTypeReference(node)) needsObject = true;
+        // A qualified enum name must be classified once, not again by its right identifier.
+        if (access) return;
+      }
+      T.forEachChild(node, visit);
+    };
+    visit(file);
+  }
+  if (problem) return problem;
+
+  // Clean up only imports affected by this conversion, preserving other bindings.
+  const printer = T.createPrinter({ removeComments: true, newLine: source.text.includes('\r\n') ? T.NewLineKind.CarriageReturnLineFeed : T.NewLineKind.LineFeed });
+  const commentTokens = text => {
+    const scanner = T.createScanner(T.ScriptTarget.Latest, false, T.LanguageVariant.Standard, text);
+    const result = [];
+    for (let token = scanner.scan(); token !== T.SyntaxKind.EndOfFileToken; token = scanner.scan()) if (token === T.SyntaxKind.SingleLineCommentTrivia || token === T.SyntaxKind.MultiLineCommentTrivia) result.push(scanner.getTokenText());
+    return result;
+  };
+  const printImportExport = (original, updated) => {
+    // The surrounding comments are outside our replacement range. Keep only
+    // comments inside the declaration here, including comments on removed bindings.
+    const comments = commentTokens(original.getText());
+    return [...comments, updated ? printer.printNode(T.EmitHint.Unspecified, updated, original.getSourceFile()) : ''].join('\n');
+  };
+  if (!needsObject) for (const exported of exports) {
+    if (exported.isTypeOnly || !exported.exportClause || !T.isNamedExports(exported.exportClause)) continue;
+    let changed = false;
+    const elements = exported.exportClause.elements.map(item => {
+      if (canonical(item.name) !== symbol && (!item.propertyName || canonical(item.propertyName) !== symbol)) return item;
+      changed = true;
+      return T.factory.updateExportSpecifier(item, true, item.propertyName, item.name);
+    });
+    if (changed) add(exported, printImportExport(exported, T.factory.updateExportDeclaration(exported, exported.modifiers, false, T.factory.updateNamedExports(exported.exportClause, elements), exported.moduleSpecifier, exported.attributes)));
+  }
+  for (const imported of imports) {
+    const clause = imported.importClause;
+    if (!clause) continue;
+    const bindings = [...(clause.name ? [clause.name] : []), ...(clause.namedBindings ? T.isNamedImports(clause.namedBindings) ? clause.namedBindings.elements : [clause.namedBindings] : [])];
+    const removed = new Set();
+    const typeOnly = new Set();
+    for (const binding of bindings) {
+      const name = T.isIdentifier(binding) ? binding : binding.name;
+      const bindingSymbol = checker.getSymbolAtLocation(name);
+      const direct = canonical(name) === symbol;
+      const fileEdits = edits.filter(edit => edit.file === imported.getSourceFile());
+      const references = [];
+      const collect = node => {
+        if (node === imported) return;
+        if (T.isIdentifier(node) && checker.getSymbolAtLocation(node) === bindingSymbol) references.push(node);
+        T.forEachChild(node, collect);
+      };
+      collect(imported.getSourceFile());
+      const remaining = references.filter(node => !fileEdits.some(edit => edit.start <= node.getStart() && edit.end >= node.getEnd()));
+      const affected = direct || remaining.length !== references.length;
+      if (affected && !remaining.length) removed.add(binding);
+      else if (direct && !needsObject && remaining.every(isTypeReference)) typeOnly.add(binding);
+    }
+    if (!removed.size && !typeOnly.size) continue;
+    const name = clause.name && !removed.has(clause.name) ? clause.name : undefined;
+    let named = clause.namedBindings;
+    if (named && T.isNamedImports(named)) {
+      const elements = named.elements.filter(item => !removed.has(item)).map(item => T.factory.updateImportSpecifier(item, item.isTypeOnly || (!clause.isTypeOnly && typeOnly.has(item)), item.propertyName, item.name));
+      named = elements.length ? T.factory.updateNamedImports(named, elements) : undefined;
+    } else if (named && removed.has(named)) named = undefined;
+    if (!name && !named) {
+      // Preserve module execution when the old import had runtime meaning.
+      add(imported, printImportExport(imported, clause.isTypeOnly ? undefined : T.factory.updateImportDeclaration(imported, imported.modifiers, undefined, imported.moduleSpecifier, imported.attributes)));
+    } else {
+      const updated = T.factory.updateImportDeclaration(imported, imported.modifiers, T.factory.updateImportClause(clause, clause.isTypeOnly || (!!name && !named && typeOnly.has(clause.name)), name, named), imported.moduleSpecifier, imported.attributes);
+      add(imported, printImportExport(imported, updated));
+    }
+  }
+  if (problem) return problem;
+  const comments = (start, end) => commentTokens(source.text.slice(start, end));
+  const newline = source.text.includes('\r\n') ? '\r\n' : '\n';
+  const exported = declaration.modifiers?.some(item => item.kind === T.SyntaxKind.ExportKeyword) ? 'export ' : '';
+  const name = declaration.name.text;
+  const values = [...members.values()];
+  const memberText = declaration.members.map(member => [...comments(member.getFullStart(), member.getEnd()), quote(member.name.text)].join(newline));
+  const leftover = comments(declaration.members.length ? declaration.members[declaration.members.length - 1].getEnd() : declaration.name.getEnd(), declaration.getEnd());
+  const prefixComments = declaration.members.length ? comments(declaration.getStart(), declaration.members[0].getFullStart()) : comments(declaration.getStart(), declaration.name.getEnd());
+  let replacement = [...prefixComments, `${exported}type ${name} = ${memberText.length ? memberText.join(` |${newline}`) : 'never'};`, ...leftover].join(newline);
+  if (needsObject) replacement += `${newline}${exported}const ${name} = {${newline}${values.map(value => `  ${value === '__proto__' ? `[${quote(value)}]` : T.isIdentifierText(value, T.ScriptTarget.Latest) ? value : quote(value)}: ${quote(value)},`).join(newline)}${newline}} as const satisfies { [K in ${name}]: K; };`;
+  add(declaration, replacement);
+  if (problem) return problem;
+  const grouped = new Map();
+  for (const edit of edits) { const list = grouped.get(edit.file) || []; list.push(edit); grouped.set(edit.file, list); }
+  for (const list of grouped.values()) {
+    list.sort((a, b) => a.start - b.start);
+    if (list.some((edit, index) => index && list[index - 1].end > edit.start)) return fail('Overlapping references prevent a safe conversion.');
+  }
+  const diagnostics = p => T.getPreEmitDiagnostics(p).filter(item => item.category === T.DiagnosticCategory.Error);
+  const diagnosticKey = diagnostic => `${diagnostic.file?.fileName || ''}:${diagnostic.code}:${T.flattenDiagnosticMessageText(diagnostic.messageText, '\n')}`;
+  const baseline = new Map();
+  for (const diagnostic of diagnostics(program)) { const key = diagnosticKey(diagnostic); baseline.set(key, (baseline.get(key) || 0) + 1); }
+  const saved = new Map(overlays);
+  try {
+    for (const [file, list] of grouped) {
+      let text = file.text;
+      for (const edit of [...list].reverse()) text = text.slice(0, edit.start) + edit.newText + text.slice(edit.end);
+      overlays.set(path.resolve(file.fileName), { text, version: `enum-preview-${Date.now()}` });
+    }
+    const transformed = createProgram();
+    for (const diagnostic of diagnostics(transformed)) {
+      const key = diagnosticKey(diagnostic);
+      if (baseline.get(key)) baseline.set(key, baseline.get(key) - 1);
+      else {
+        const result = fail(`Conversion would introduce TypeScript error TS${diagnostic.code}: ${T.flattenDiagnosticMessageText(diagnostic.messageText, ' ')}`, declaration);
+        const original = diagnostic.file && program.getSourceFile(diagnostic.file.fileName);
+        if (original && diagnostic.start !== undefined) {
+          let delta = 0;
+          let start = diagnostic.start;
+          for (const edit of grouped.get(original) || []) {
+            const transformedStart = edit.start + delta;
+            if (diagnostic.start < transformedStart) break;
+            if (diagnostic.start < transformedStart + edit.newText.length) { start = edit.start; delta = 0; break; }
+            delta += edit.newText.length - (edit.end - edit.start);
+          }
+          start = Math.max(0, Math.min(original.text.length, start - delta));
+          result.location = { uri: uri(original.fileName), range: range(original, start, start) };
+        }
+        return result;
+      }
+    }
+  } finally {
+    overlays.clear(); for (const [file, overlay] of saved) overlays.set(file, overlay);
+  }
+  return {
+    enumName: name, needsObject, reason: null,
+    // Full source snapshots also catch changes outside an individual edit range.
+    documents: [...grouped.keys()].map(file => ({ uri: uri(file.fileName), expectedText: file.text })),
+    edits: edits.map(edit => ({ uri: uri(edit.file.fileName), range: range(edit.file, edit.start, edit.end), expectedText: edit.file.text.slice(edit.start, edit.end), newText: edit.newText })),
+  };
+}

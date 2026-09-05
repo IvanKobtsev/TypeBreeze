@@ -39,6 +39,43 @@ pub struct RenameTarget {
     pub range: Range,
     pub expected_text: String,
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnumToUnionParams {
+    pub text_document: lsp_types::TextDocumentIdentifier,
+    pub position: lsp_types::Position,
+    pub text: String,
+    pub client_version: i64,
+    pub documents: Vec<DocumentUnionsParams>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnumToUnionPlan {
+    pub enum_name: Option<String>,
+    pub needs_object: Option<bool>,
+    pub reason: Option<String>,
+    pub location: Option<Location>,
+    pub documents: Vec<EnumDocumentSnapshot>,
+    pub edits: Vec<EnumTextEdit>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnumDocumentSnapshot {
+    pub uri: Url,
+    pub expected_text: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnumTextEdit {
+    pub uri: Url,
+    pub range: Range,
+    pub expected_text: String,
+    pub new_text: String,
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DocumentUnionsResponse {

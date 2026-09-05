@@ -24,6 +24,22 @@ refactoring changes only literals that TypeScript resolves to the same declared
 union, validates every source token before writing, and applies all files as one
 undoable command. Unrelated identical strings are left untouched.
 
+Use **Alt+Enter → Enum to Union** on an enum declaration to convert it and its
+project references in one undoable operation. Values come from member names,
+not the old numeric or string initializers: `enum Status { draft = 10, live = 20 }`
+becomes `type Status = 'draft' | 'live'`. Member accesses become string literals,
+and computed object keys such as `[Status.draft]` become `draft`.
+
+The enum name, exports, member order, and comments are preserved. When object
+uses remain (for example `Object.values(Status)` or `typeof Status`), the action
+also creates a same-named `const` object checked with
+`as const satisfies { [K in Status]: K; }`. Type annotations alone do not require
+that object. Import bindings are cleaned up while preserving module execution.
+Open unsaved documents are included in the plan. Reverse numeric lookups, member
+writes, ambient or merged declarations, and conversions that introduce TypeScript
+errors are rejected with an explanation. References outside the active project's
+editable workspace are not rewritten.
+
 TypeScript semantics are provided by an editor-neutral Rust language server,
 which supervises a bundled compiler worker using the project's TypeScript
 installation. The worker asks TypeScript directly for each literal's contextual

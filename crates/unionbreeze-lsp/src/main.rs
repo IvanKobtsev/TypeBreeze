@@ -101,6 +101,9 @@ fn handle_request(connection: &Connection, worker: &CompilerWorker, req: Request
             .ok()
             .flatten(),
         "unionBreeze/renamePlan" => worker.request("renamePlan", req.params).ok().flatten(),
+        "unionBreeze/enumToUnionPlan" => {
+            worker.request("enumToUnionPlan", req.params).ok().flatten()
+        }
         HoverRequest::METHOD => serde_json::from_value::<HoverParams>(req.params)
             .ok()
             .and_then(|p| hover_result(worker, &p.text_document_position_params))
