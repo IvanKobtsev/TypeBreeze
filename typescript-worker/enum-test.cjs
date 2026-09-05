@@ -124,6 +124,13 @@ async function conversion(files, options = {}) {
     assert.equal(output['use.ts'].split('// import documentation').length - 1, 1);
   }
   {
+    const { plan, output } = await conversion({ 'enum.ts': 'export enum E { a, b }', 'use.ts': "import './setup';\nimport { E } from './enum';\nconst v = E.a;", 'setup.ts': 'export {};' });
+    assert.equal(plan.reason, null, plan.reason);
+    assert.doesNotMatch(output['use.ts'], /from ['"]\.\/enum|import ['"]\.\/enum/);
+    assert.match(output['use.ts'], /import '\.\/setup'/);
+    assert.match(output['use.ts'], /const v = 'a'/);
+  }
+  {
     const { plan, output } = await conversion({ 'enum.ts': 'export enum E { a, b }', 'use.ts': "// import documentation\nimport { E } from './enum'; // module comment\nconst value: E = E.a;" });
     assert.equal(plan.reason, null, plan.reason);
     assert.equal(output['use.ts'].split('// import documentation').length - 1, 1, output['use.ts']);

@@ -34,7 +34,8 @@ The enum name, exports, member order, and comments are preserved. When object
 uses remain (for example `Object.values(Status)` or `typeof Status`), the action
 also creates a same-named `const` object checked with
 `as const satisfies { [K in Status]: K; }`. Type annotations alone do not require
-that object. Import bindings are cleaned up while preserving module execution.
+that object. Imports are removed when their last binding is removed; existing
+side-effect-only imports are left unchanged.
 Open unsaved documents are included in the plan. Reverse numeric lookups, member
 writes, ambient or merged declarations, and conversions that introduce TypeScript
 errors are rejected with an explanation. References outside the active project's

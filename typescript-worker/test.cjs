@@ -29,6 +29,10 @@ const compared = status === 'wide';
 `;
 const usagePath = path.join(root, 'usage.ts');
 fs.writeFileSync(usagePath, usage);
+const domainPath = path.join(root, 'domain.ts');
+fs.writeFileSync(domainPath, "export type DomainType = 'TestCase' | 'TestPoint';\nexport function useDomainClassTracker<T extends DomainType>(entityType: T, handler: (value: T) => void) {}\nexport function useDomainEntityTracker<T extends DomainType>(entityType: T, id: number, handler: (value: T) => void) {}\nexport function ordinary<T extends string>(value: T) {}\n");
+const domainUsagePath = path.join(root, 'domain-usage.ts');
+fs.writeFileSync(domainUsagePath, "import { useDomainClassTracker, useDomainEntityTracker, ordinary } from './domain';\nuseDomainClassTracker('TestCase', value => {});\nuseDomainEntityTracker('TestCase', 1, value => {});\nordinary('TestCase');\nuseDomainClassTracker<'TestCase'>('TestCase', value => {});\n");
 
 const child = spawn(process.execPath, [path.join(__dirname, 'worker.cjs')], { stdio: ['pipe', 'pipe', 'inherit'] });
 const lines = readline.createInterface({ input: child.stdout });
@@ -38,6 +42,19 @@ function request(method, params) { return new Promise((resolve, reject) => { con
 
 (async () => {
   await request('initialize', { root });
+  const domainDocument = await request('documentUnions', { textDocument: { uri: pathToFileURL(domainUsagePath).href }, includeUsages: false });
+  assert.equal(domainDocument.literals.length, 2);
+  assert(domainDocument.literals.every(item => item.kind === 'usage' && item.contextualTypeName === 'DomainType' && item.domain.uri.endsWith('/domain.ts')));
+  for (const line of [1, 2]) {
+    const member = await request('resolveLiteral', { textDocument: { uri: pathToFileURL(domainUsagePath).href }, position: { line, character: 25 } });
+    assert.equal(member.currentValue, 'TestCase');
+    assert.deepEqual(member.assignableMembers.map(item => item.value), ['TestCase', 'TestPoint']);
+  }
+  const domainLocations = await request('navigationTargets', { textDocument: { uri: pathToFileURL(domainPath).href }, position: { line: 0, character: 28 } });
+  assert.equal(domainLocations.length, 2);
+  assert.deepEqual(domainLocations.map(item => item.range.start.line), [1, 2]);
+  const domainDeclarations = await request('documentUnions', { textDocument: { uri: pathToFileURL(domainPath).href } });
+  assert.equal(domainDeclarations.literals.find(item => item.currentValue === 'TestCase').usageLocations.length, 2);
   const declarationHover = await request('resolveLiteral', { textDocument: { uri: pathToFileURL(path.join(root, 'types.ts')).href }, position: { line: 1, character: 46 } });
   assert.equal(declarationHover.kind, 'declaration');
   assert.equal(declarationHover.currentValue, 'wide');

@@ -69,6 +69,20 @@ function canonicalSymbol(T, checker, symbol) {
 function finiteParts(T,type){const parts=type?(type.isUnion()?type.types:[type]):[];const strings=parts.filter(item=>item.flags&T.TypeFlags.StringLiteral);const invalid=parts.filter(item=>!(item.flags&T.TypeFlags.StringLiteral)&&!(item.flags&(T.TypeFlags.Undefined|T.TypeFlags.Null)));return{parts,strings,valid:strings.length>=2&&strings.length<=100&&!invalid.length};}
 function contextualTypeForLiteral(T,checker,node){
   let contextual=checker.getContextualType(node);if(finiteParts(T,contextual).valid)return contextual;
+  // Inference specializes `T extends DomainType` to this one literal. Recover
+  // the declared constraint from the selected signature, not unrelated overloads.
+  if (T.isCallExpression(node.parent) && !node.parent.typeArguments?.length) {
+    const call = node.parent;
+    const index = call.arguments.indexOf(node);
+    const parameter = checker.getResolvedSignature(call)?.getDeclaration()?.parameters[index];
+    if (parameter?.type && !parameter.dotDotDotToken) {
+      const declared = checker.getTypeFromTypeNode(parameter.type);
+      if (declared.flags & T.TypeFlags.TypeParameter) {
+        const constraint = checker.getBaseConstraintOfType(declared);
+        if (finiteParts(T, constraint).valid) return constraint;
+      }
+    }
+  }
   if(T.isPropertyAssignment(node.parent)){const object=node.parent.parent;const objectTypes=[checker.getContextualType(object)];if(T.isCallExpression(object.parent)){const argumentIndex=object.parent.arguments.indexOf(object);const signature=checker.getResolvedSignature(object.parent);const parameter=signature?.parameters[Math.min(argumentIndex,signature.parameters.length-1)];if(parameter){objectTypes.push(checker.getTypeOfSymbolAtLocation(parameter,object));const declaration=parameter.declarations?.find(item=>item.type);if(declaration?.type)objectTypes.push(checker.getTypeFromTypeNode(declaration.type));}}for(let objectType of objectTypes){if(objectType?.flags&T.TypeFlags.TypeParameter)objectType=checker.getBaseConstraintOfType(objectType);const property=objectType?.getProperty(node.parent.name.getText(node.getSourceFile()));if(property){const propertyType=checker.getTypeOfSymbolAtLocation(property,node);if(finiteParts(T,propertyType).valid)return propertyType;}}}
   if(T.isBinaryExpression(node.parent)&&[T.SyntaxKind.EqualsEqualsEqualsToken,T.SyntaxKind.ExclamationEqualsEqualsToken,T.SyntaxKind.EqualsEqualsToken,T.SyntaxKind.ExclamationEqualsToken].includes(node.parent.operatorToken.kind)){const other=node.parent.left===node?node.parent.right:node.parent.left;const symbol=checker.getSymbolAtLocation(other);let otherType=symbol?.valueDeclaration?checker.getTypeOfSymbolAtLocation(symbol,symbol.valueDeclaration):checker.getTypeAtLocation(other);if(otherType?.flags&T.TypeFlags.TypeParameter)otherType=checker.getBaseConstraintOfType(otherType);if(finiteParts(T,otherType).valid)return otherType;}
   return contextual;
@@ -338,8 +352,9 @@ function enumToUnionPlan(params) {
       named = elements.length ? T.factory.updateNamedImports(named, elements) : undefined;
     } else if (named && removed.has(named)) named = undefined;
     if (!name && !named) {
-      // Preserve module execution when the old import had runtime meaning.
-      add(imported, printImportExport(imported, clause.isTypeOnly ? undefined : T.factory.updateImportDeclaration(imported, imported.modifiers, undefined, imported.moduleSpecifier, imported.attributes)));
+      // An import whose final binding was removed is removed altogether.
+      // Independently authored side-effect imports never enter this path.
+      add(imported, printImportExport(imported, undefined));
     } else {
       const updated = T.factory.updateImportDeclaration(imported, imported.modifiers, T.factory.updateImportClause(clause, clause.isTypeOnly || (!!name && !named && typeOnly.has(clause.name)), name, named), imported.moduleSpecifier, imported.attributes);
       add(imported, printImportExport(imported, updated));
