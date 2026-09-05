@@ -27,11 +27,14 @@ class UnionBreezeGotoDeclarationHandler:GotoDeclarationHandler {
             val leaf=psiFile.findElementAt((targetOffset+1).coerceAtMost((psiFile.textLength-1).coerceAtLeast(0)))?:return@mapNotNull null
             PsiTreeUtil.getParentOfType(leaf,JSLiteralExpression::class.java,false)?:leaf
         }.distinctBy{Pair(it.containingFile?.virtualFile?.url,it.textRange.startOffset)}
-        if(resolved.kind=="declaration"&&targets.isNotEmpty()) {
-            com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
-                if(!project.isDisposed) showUnionUsages(project,activeEditor,targets,resolved)
+        if(resolved.kind=="declaration") {
+            // Navigation handlers are also queried for Ctrl-hover. Only open
+            // Show Usages when the returned target is actually navigated to.
+            val declaration=PsiTreeUtil.getParentOfType(element,JSLiteralExpression::class.java,false)?:element
+            return when(targets.size) {
+                1 -> targets.toTypedArray()
+                else -> arrayOf(UnionBreezeUsagesTarget(declaration,activeEditor,targets))
             }
-            return emptyArray()
         }
         return targets.takeIf{it.isNotEmpty()}?.toTypedArray()
     }

@@ -1,76 +1,102 @@
 package dev.unionbreeze.webstorm
 
+import com.intellij.find.actions.ShowUsagesAction
+import com.intellij.find.actions.ShowUsagesActionHandler
+import com.intellij.find.actions.ShowUsagesParameters
+import com.intellij.internal.statistic.eventLog.events.EventPair
+import com.intellij.lang.Language
 import com.intellij.openapi.editor.Editor
-import com.intellij.openapi.editor.EditorFactory
-import com.intellij.openapi.editor.ScrollType
-import com.intellij.openapi.editor.ex.EditorEx
-import com.intellij.openapi.editor.highlighter.EditorHighlighterFactory
-import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
-import com.intellij.openapi.project.Project
-import com.intellij.openapi.ui.popup.JBPopupFactory
-import com.intellij.openapi.util.Disposer
 import com.intellij.psi.PsiElement
-import com.intellij.ui.components.JBList
-import com.intellij.ui.components.JBScrollPane
-import java.awt.BorderLayout
-import java.awt.Dimension
-import java.awt.event.MouseAdapter
-import java.awt.event.MouseEvent
-import javax.swing.DefaultListCellRenderer
-import javax.swing.JList
-import javax.swing.JPanel
-import javax.swing.JSplitPane
-import javax.swing.KeyStroke
-import javax.swing.AbstractAction
-import java.awt.event.ActionEvent
+import com.intellij.psi.SmartPointerManager
+import com.intellij.psi.SmartPsiElementPointer
+import com.intellij.psi.impl.FakePsiElement
+import com.intellij.psi.search.GlobalSearchScope
+import com.intellij.psi.search.SearchScope
+import com.intellij.ui.awt.RelativePoint
+import com.intellij.usageView.UsageInfo
+import com.intellij.usages.UsageInfo2UsageAdapter
+import com.intellij.usages.UsageSearchPresentation
+import com.intellij.usages.UsageSearcher
 
-internal fun showUnionUsages(project: Project, editor: Editor, targets: List<PsiElement>, member: ResolvedLiteral) {
-    val list = JBList(targets)
-    list.cellRenderer = object : DefaultListCellRenderer() {
-        override fun getListCellRendererComponent(list: JList<*>?, value: Any?, index: Int, selected: Boolean, focus: Boolean): java.awt.Component {
-            val element = value as PsiElement
-            val file = element.containingFile.virtualFile
-            val document = FileDocumentManager.getInstance().getDocument(file)
-            val line = document?.getLineNumber(element.textRange.startOffset) ?: 0
-            val snippet = document?.let { it.charsSequence.subSequence(it.getLineStartOffset(line), it.getLineEndOffset(line)).toString().trim() }.orEmpty()
-            return super.getListCellRendererComponent(list, "${file.name}:${line + 1}  $snippet", index, selected, focus)
+internal class UnionBreezeUsagesTarget(
+    declaration: PsiElement,
+    private val editor: Editor,
+    usages: List<PsiElement>,
+) : FakePsiElement() {
+    private val declarationPointer = SmartPointerManager.createPointer(declaration)
+    private val usagePointers = usages.map(SmartPointerManager::createPointer)
+
+    override fun getParent(): PsiElement? = declarationPointer.element
+
+    override fun getName(): String? = declarationPointer.element?.text
+
+    override fun canNavigate(): Boolean = true
+
+    override fun canNavigateToSource(): Boolean = true
+
+    override fun navigate(requestFocus: Boolean) {
+        val declaration = declarationPointer.element ?: return
+        val validUsages = usagePointers.mapNotNull(SmartPsiElementPointer<PsiElement>::getElement)
+        if (validUsages.isEmpty()) return
+        if (validUsages.size == 1) {
+            val usage = validUsages.single()
+            val usageFile = usage.containingFile?.virtualFile ?: return
+            OpenFileDescriptor(usage.project, usageFile, usage.textOffset).navigate(requestFocus)
+            return
         }
+        val handler = UnionBreezeShowUsagesHandler(declaration, validUsages)
+        val parameters = ShowUsagesParameters.initial(
+            declaration.project,
+            editor,
+            RelativePoint.getCenterOf(editor.contentComponent),
+        )
+        ShowUsagesAction.showElementUsagesWithResult(
+            parameters,
+            handler,
+            handler.createUsageView(declaration.project),
+        )
     }
-    val preview = JPanel(BorderLayout())
-    var viewer: Editor? = null
-    fun updatePreview() {
-        viewer?.let { EditorFactory.getInstance().releaseEditor(it) }; viewer = null
-        preview.removeAll()
-        val element = list.selectedValue?.takeIf { it.isValid } ?: return
-        val file = element.containingFile.virtualFile
-        val document = FileDocumentManager.getInstance().getDocument(file) ?: return
-        val next = EditorFactory.getInstance().createViewer(document, project)
-        (next as? EditorEx)?.highlighter = EditorHighlighterFactory.getInstance().createEditorHighlighter(project, file)
-        next.caretModel.moveToOffset(element.textRange.startOffset)
-        next.selectionModel.setSelection(element.textRange.startOffset, element.textRange.endOffset)
-        next.scrollingModel.scrollToCaret(ScrollType.CENTER)
-        viewer = next
-        preview.add(next.component, BorderLayout.CENTER)
-        preview.revalidate(); preview.repaint()
+}
+
+private class UnionBreezeShowUsagesHandler(
+    private val declaration: PsiElement,
+    usageElements: List<PsiElement>,
+) : ShowUsagesActionHandler {
+    private val usages = usageElements.map { UsageInfo2UsageAdapter(UsageInfo(it)) }
+    private val scope = GlobalSearchScope.projectScope(declaration.project)
+
+    override fun isValid(): Boolean = declaration.isValid
+
+    override fun getPresentation(): UsageSearchPresentation = object : UsageSearchPresentation {
+        override fun getSearchTargetString(): String = declaration.text
+
+        override fun getOptionsString(): String = "UnionBreeze union member usages"
     }
-    val panel = JSplitPane(JSplitPane.VERTICAL_SPLIT, JBScrollPane(list), preview)
-    panel.preferredSize = Dimension(850, 480)
-    panel.resizeWeight = 0.35
-    val popup = JBPopupFactory.getInstance().createComponentPopupBuilder(panel, list)
-        .setTitle("${member.contextualTypeName}: '${member.currentValue}' — ${targets.size} usages")
-        .setResizable(true).setMovable(true).setRequestFocus(true).createPopup()
-    Disposer.register(popup, com.intellij.openapi.Disposable { viewer?.let { EditorFactory.getInstance().releaseEditor(it) }; viewer = null })
-    fun navigate() {
-        val element = list.selectedValue?.takeIf { it.isValid } ?: return
-        OpenFileDescriptor(project, element.containingFile.virtualFile, element.textRange.startOffset).navigate(true)
-        popup.cancel()
+
+    override fun createUsageSearcher(): UsageSearcher = UsageSearcher { processor ->
+        usages.forEach { if (!processor.process(it)) return@UsageSearcher }
     }
-    list.addListSelectionListener { if(!it.valueIsAdjusting) updatePreview() }
-    list.addMouseListener(object : MouseAdapter() { override fun mouseClicked(event: MouseEvent) { if(event.clickCount == 2) navigate() } })
-    list.getInputMap().put(KeyStroke.getKeyStroke("ENTER"), "navigate")
-    list.actionMap.put("navigate", object : AbstractAction() { override fun actionPerformed(event: ActionEvent) = navigate() })
-    list.selectedIndex = 0
-    popup.showInBestPositionFor(editor)
-    viewer?.scrollingModel?.scrollToCaret(ScrollType.CENTER)
+
+    override fun findUsages() = Unit
+
+    override fun showDialog(): ShowUsagesActionHandler = this
+
+    override fun withScope(scope: SearchScope): ShowUsagesActionHandler = this
+
+    override fun moreUsages(parameters: ShowUsagesParameters): ShowUsagesParameters = parameters.moreUsages()
+
+    override fun getSelectedScope(): SearchScope = scope
+
+    override fun getMaximalScope(): SearchScope = scope
+
+    override fun getTargetLanguage(): Language = declaration.language
+
+    override fun getTargetClass(): Class<*> = declaration.javaClass
+
+    override fun getEventData(): List<EventPair<*>> = mutableListOf()
+
+    override fun navigateToSingleUsageImmediately(): Boolean = false
+
+    override fun buildFinishEventData(usage: UsageInfo?): List<EventPair<*>> = mutableListOf()
 }

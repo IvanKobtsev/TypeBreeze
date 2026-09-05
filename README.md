@@ -9,10 +9,10 @@ and usage styling can be enabled independently under **Settings | UnionBreeze**,
 and their colors/effects are configured under **Editor | Color Scheme |
 UnionBreeze**. Standard **Go to Declaration** navigation goes from a usage to
 its exact member declaration and from a declaration to its matching usages;
-Declaration usages open in a resizable popup with file and line labels and a
-syntax-highlighted source preview. Select a result to preview it; press Enter or
-double-click to navigate. Hover documentation identifies the literal's union
-and available members.
+Multiple declaration usages open in WebStorm's native **Show Usages** popup,
+with its standard code preview and navigation controls. A single usage is
+navigated to directly. Hover documentation identifies the literal's union and
+available members.
 
 Highlighting is published before the workspace usage scan finishes. Unused
 declaration fading and declaration-to-usage navigation become available when
