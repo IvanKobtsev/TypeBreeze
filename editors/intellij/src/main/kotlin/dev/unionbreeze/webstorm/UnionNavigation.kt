@@ -27,6 +27,12 @@ class UnionBreezeGotoDeclarationHandler:GotoDeclarationHandler {
             val leaf=psiFile.findElementAt((targetOffset+1).coerceAtMost((psiFile.textLength-1).coerceAtLeast(0)))?:return@mapNotNull null
             PsiTreeUtil.getParentOfType(leaf,JSLiteralExpression::class.java,false)?:leaf
         }.distinctBy{Pair(it.containingFile?.virtualFile?.url,it.textRange.startOffset)}
+        if(resolved.kind=="declaration"&&targets.isNotEmpty()) {
+            com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
+                if(!project.isDisposed) showUnionUsages(project,activeEditor,targets,resolved)
+            }
+            return emptyArray()
+        }
         return targets.takeIf{it.isNotEmpty()}?.toTypedArray()
     }
 }

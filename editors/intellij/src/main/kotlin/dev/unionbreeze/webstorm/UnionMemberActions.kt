@@ -76,7 +76,7 @@ class UnionCache(private val project:Project){
     private data class Entry(val stamp:Long,val literals:List<ResolvedLiteral>);private val entries=ConcurrentHashMap<String,Entry>()
     private val refreshing=ConcurrentHashMap.newKeySet<String>()
     private val requestLock=Any()
-    init { EditorFactory.getInstance().eventMulticaster.addDocumentListener(object:DocumentListener{override fun documentChanged(event:DocumentEvent){FileDocumentManager.getInstance().getFile(event.document)?.takeIf(UnionBreezeLspProvider::supports)?.let{if(entries.remove(it.url)!=null)refresh(it)}}},project) }
+    init { EditorFactory.getInstance().eventMulticaster.addDocumentListener(object:DocumentListener{override fun documentChanged(event:DocumentEvent){FileDocumentManager.getInstance().getFile(event.document)?.takeIf(UnionBreezeLspProvider::supports)?.let{entries.remove(it.url);refresh(it)}}},project) }
     fun put(file:VirtualFile,document:Document,literal:ResolvedLiteral){
         entries.compute(file.url){_,old->
             val retained=old?.takeIf{it.stamp==document.modificationStamp}?.literals.orEmpty().filterNot{it.kind==literal.kind&&it.range==literal.range}
@@ -87,9 +87,46 @@ class UnionCache(private val project:Project){
         val entry=entries[file.url]?.takeIf{it.stamp==document.modificationStamp}?:run{refresh(file);return null}
         return entry.literals.firstOrNull{val start=document.offset(it.range.start)?:-2;val end=document.offset(it.range.end)?:-1;it.kind=="usage"&&it.assignableMembers.size>1&&offset in (start+1)..(end-1)}
     }
-    fun matching(file:VirtualFile,document:Document,range:TextRange)=entries[file.url]?.takeIf{it.stamp==document.modificationStamp}?.literals?.firstOrNull{document.offset(it.range.start)==range.startOffset&&document.offset(it.range.end)==range.endOffset}
+    fun matching(file:VirtualFile,document:Document,range:TextRange):ResolvedLiteral? {
+        val entry=entries[file.url]?.takeIf{it.stamp==document.modificationStamp}?:run{refresh(file);return null}
+        return entry.literals.firstOrNull{document.offset(it.range.start)==range.startOffset&&document.offset(it.range.end)==range.endOffset}
+    }
     fun navigationAt(file:VirtualFile,document:Document,offset:Int)=entries[file.url]?.takeIf{it.stamp==document.modificationStamp}?.literals?.firstOrNull{val start=document.offset(it.range.start)?:-2;val end=document.offset(it.range.end)?:-1;offset in start..end}
     fun refresh(file:VirtualFile){if(refreshing.add(file.url))scheduleRefresh(file,0)}
-    private fun scheduleRefresh(file:VirtualFile,attempt:Int){AppExecutorUtil.getAppScheduledExecutorService().schedule({val document=ReadAction.compute<Document?,RuntimeException>{FileDocumentManager.getInstance().getDocument(file)};if(document==null){refreshing.remove(file.url);return@schedule};val stamp=document.modificationStamp;val text=document.text;val clients=LspClientManager.getInstance(project).getClients(UnionBreezeLspProvider::class.java).filter{it.descriptor.isSupportedFile(file)};if(clients.isEmpty()){if(attempt<5)scheduleRefresh(file,attempt+1)else refreshing.remove(file.url);return@schedule};val response=synchronized(requestLock){clients.firstNotNullOfOrNull{client->runCatching{client.sendRequestSync(15_000){server->(server as UnionBreezeLanguageServer).documentUnions(DocumentUnionsParams(client.getDocumentIdentifier(file),text,stamp))}}.onFailure{LOG.warn("documentUnions failed for ${file.path}",it)}.getOrNull()}};if(response!=null&&response.clientVersion==stamp&&document.modificationStamp==stamp){entries[file.url]=Entry(stamp,response.literals);refreshing.remove(file.url);ApplicationManager.getApplication().invokeLater{DaemonCodeAnalyzer.getInstance(project).restart()}}else if(attempt<5)scheduleRefresh(file,attempt+1)else refreshing.remove(file.url)},if(attempt==0)300 else 500,TimeUnit.MILLISECONDS)}
+    private fun scheduleRefresh(file:VirtualFile,attempt:Int,includeUsages:Boolean=false) {
+        AppExecutorUtil.getAppScheduledExecutorService().schedule({
+            if(project.isDisposed || !file.isValid) { refreshing.remove(file.url); return@schedule }
+            val snapshot=ReadAction.compute<Triple<Document,Long,String>?,RuntimeException> {
+                FileDocumentManager.getInstance().getDocument(file)?.let { Triple(it,it.modificationStamp,it.text) }
+            }
+            if(snapshot==null) { refreshing.remove(file.url); return@schedule }
+            val (document,stamp,text)=snapshot
+            val clients=LspClientManager.getInstance(project).getClients(UnionBreezeLspProvider::class.java).filter{it.descriptor.isSupportedFile(file)}
+            if(clients.isEmpty()) {
+                if(attempt<5)scheduleRefresh(file,attempt+1,includeUsages) else refreshing.remove(file.url)
+                return@schedule
+            }
+            val response=synchronized(requestLock) {
+                clients.firstNotNullOfOrNull { client ->
+                    runCatching { client.sendRequestSync(15_000) { server ->
+                        (server as UnionBreezeLanguageServer).documentUnions(DocumentUnionsParams(client.getDocumentIdentifier(file),text,stamp,includeUsages))
+                    } }.onFailure{LOG.warn("documentUnions failed for ${file.path}",it)}.getOrNull()
+                }
+            }
+            ApplicationManager.getApplication().invokeLater {
+                if(project.isDisposed) { refreshing.remove(file.url); return@invokeLater }
+                if(document.modificationStamp!=stamp) {
+                    // An edit during either pass always starts with the fast pass again.
+                    scheduleRefresh(file,0)
+                } else if(response!=null && response.clientVersion==stamp) {
+                    entries[file.url]=Entry(stamp,response.literals)
+                    if(!includeUsages && response.literals.any{it.kind=="declaration"}) scheduleRefresh(file,0,true)
+                    else refreshing.remove(file.url)
+                    com.intellij.psi.PsiManager.getInstance(project).findFile(file)?.let { DaemonCodeAnalyzer.getInstance(project).restart(it) }
+                } else if(attempt<5) scheduleRefresh(file,attempt+1,includeUsages)
+                else refreshing.remove(file.url)
+            }
+        },if(attempt==0)50 else 500,TimeUnit.MILLISECONDS)
+    }
     companion object { private val LOG=Logger.getInstance(UnionCache::class.java) }
 }

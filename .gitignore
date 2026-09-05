@@ -3,6 +3,7 @@
 .kotlin/
 build/
 target/
+node_modules/
 editors/intellij/build/
 out/
 *.iml

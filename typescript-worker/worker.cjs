@@ -133,7 +133,7 @@ function resolve(params) {
   const program = createProgram(); const file = path.resolve(fileURLToPath(params.textDocument.uri));
   const source = program.getSourceFile(file); if (!source) return null;
   const node = enclosingString(loadTypeScript(), source, offset(source, params.position));
-  return node ? resolveNode(program, source, node) : null;
+  return node ? declarationNode(program, source, node) || resolveNode(program, source, node) : null;
 }
 function documentUnions(params) {
   syncParams(params);
@@ -141,7 +141,9 @@ function documentUnions(params) {
   const source = program.getSourceFile(file); if (!source) return null;
   const literals = []; const T = loadTypeScript();
   const visit = node => { if (T.isStringLiteralLike(node)) { const item = declarationNode(program,source,node)||resolveNode(program, source, node); if (item) literals.push(item); } T.forEachChild(node, visit); };
-  visit(source);markDeclarationUsages(program,literals);return { version: null, clientVersion: params.clientVersion ?? null, generation: Date.now(), literals };
+  visit(source);
+  if (params.includeUsages !== false) markDeclarationUsages(program,literals);
+  return { version: null, clientVersion: params.clientVersion ?? null, generation: Date.now(), literals };
 }
 function locationKey(location){const value=location.range;return `${location.uri}:${value.start.line}:${value.start.character}:${value.end.line}:${value.end.character}`;}
 function sameLocation(left,right){return locationKey(left)===locationKey(right);}

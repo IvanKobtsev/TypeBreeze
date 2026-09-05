@@ -38,6 +38,14 @@ function request(method, params) { return new Promise((resolve, reject) => { con
 
 (async () => {
   await request('initialize', { root });
+  const declarationHover = await request('resolveLiteral', { textDocument: { uri: pathToFileURL(path.join(root, 'types.ts')).href }, position: { line: 1, character: 46 } });
+  assert.equal(declarationHover.kind, 'declaration');
+  assert.equal(declarationHover.currentValue, 'wide');
+  assert.equal(declarationHover.contextualTypeName, 'ToastStyleType');
+  const quickDocument = await request('documentUnions', { textDocument: { uri: pathToFileURL(path.join(root, 'types.ts')).href }, includeUsages: false, clientVersion: 1 });
+  assert.equal(quickDocument.clientVersion, 1);
+  assert.equal(quickDocument.literals.length, 2);
+  assert(quickDocument.literals.every(item => item.kind === 'declaration' && item.hasUsages === undefined && item.usageLocations === undefined));
   const target = await request('resolveLiteral', { textDocument: { uri: pathToFileURL(usagePath).href }, position: { line: 2, character: 25 } });
   assert.equal(target.currentValue, 'wide');
   assert.equal(target.contextualTypeName, 'ToastStyleType');

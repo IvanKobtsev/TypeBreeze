@@ -9,7 +9,14 @@ and usage styling can be enabled independently under **Settings | UnionBreeze**,
 and their colors/effects are configured under **Editor | Color Scheme |
 UnionBreeze**. Standard **Go to Declaration** navigation goes from a usage to
 its exact member declaration and from a declaration to its matching usages;
-WebStorm supplies its normal multi-target popup and source preview.
+Declaration usages open in a resizable popup with file and line labels and a
+syntax-highlighted source preview. Select a result to preview it; press Enter or
+double-click to navigate. Hover documentation identifies the literal's union
+and available members.
+
+Highlighting is published before the workspace usage scan finishes. Unused
+declaration fading and declaration-to-usage navigation become available when
+that second pass completes.
 
 Use WebStorm's standard **Rename** command (`Shift+F6`) on a union member
 declaration or recognized usage to rename that member across its domain. The

@@ -16,7 +16,7 @@ interface UnionBreezeLanguageServer : LanguageServer {
     @JsonRequest("unionBreeze/renamePlan")
     fun renamePlan(params:RenamePlanParams):CompletableFuture<RenamePlan?>
 }
-data class DocumentUnionsParams(val textDocument: TextDocumentIdentifier, val text:String, val clientVersion:Long)
+data class DocumentUnionsParams(val textDocument: TextDocumentIdentifier, val text:String, val clientVersion:Long, val includeUsages:Boolean=true)
 data class ResolveLiteralParams(val textDocument:TextDocumentIdentifier,val position:org.eclipse.lsp4j.Position,val text:String,val clientVersion:Long)
 data class RenamePlanParams(val textDocument:TextDocumentIdentifier,val position:org.eclipse.lsp4j.Position,val text:String,val clientVersion:Long,val newValue:String)
 data class DocumentUnionsResponse(val version: Int? = null, val clientVersion:Long?=null, val generation: Long = 0, val literals: List<ResolvedLiteral> = emptyList())
