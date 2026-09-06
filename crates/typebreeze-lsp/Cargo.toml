@@ -1,11 +1,11 @@
 [package]
-name = "unionbreeze-lsp"
+name = "typebreeze-lsp"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "unionbreeze"
+name = "typebreeze"
 path = "src/main.rs"
 
 [dependencies]
@@ -13,5 +13,5 @@ anyhow.workspace = true
 lsp-server.workspace = true
 lsp-types.workspace = true
 serde_json.workspace = true
-unionbreeze-protocol = { path = "../unionbreeze-protocol" }
+typebreeze-protocol = { path = "../typebreeze-protocol" }
 url.workspace = true

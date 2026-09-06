@@ -1,4 +1,4 @@
-package dev.unionbreeze.webstorm
+package dev.typebreeze.webstorm
 
 import com.intellij.codeInsight.FileModificationService
 import com.intellij.codeInsight.intention.IntentionAction
@@ -26,10 +26,10 @@ import org.eclipse.lsp4j.Position
 
 class EnumToUnionIntention : IntentionAction {
     override fun getText() = "Enum to Union"
-    override fun getFamilyName() = "UnionBreeze"
+    override fun getFamilyName() = "TypeBreeze"
     override fun startInWriteAction() = false
     override fun isAvailable(project: Project, editor: Editor?, file: PsiFile?): Boolean {
-        if (editor == null || file == null || file.virtualFile?.let(UnionBreezeLspProvider::supports) != true) return false
+        if (editor == null || file == null || file.virtualFile?.let(TypeBreezeLspProvider::supports) != true) return false
         val leaf = file.findElementAt(editor.caretModel.offset) ?: return false
         return PsiTreeUtil.getParentOfType(leaf, TypeScriptEnum::class.java, false) != null
     }
@@ -45,12 +45,12 @@ class EnumToUnionIntention : IntentionAction {
         ProgressManager.getInstance().run(object : Task.Backgroundable(project, "Enum to Union", true) {
             override fun run(indicator: ProgressIndicator) {
                 indicator.text = "Resolving enum references and checking the converted project"
-                val clients = LspClientManager.getInstance(project).getClients(UnionBreezeLspProvider::class.java)
+                val clients = LspClientManager.getInstance(project).getClients(TypeBreezeLspProvider::class.java)
                     .filter { it.descriptor.isSupportedFile(virtualFile) }
                 val plan = clients.firstNotNullOfOrNull { client ->
                     runCatching {
                         client.sendRequestSync(60_000) { server ->
-                            (server as UnionBreezeLanguageServer).enumToUnionPlan(EnumToUnionParams(
+                            (server as TypeBreezeLanguageServer).enumToUnionPlan(EnumToUnionParams(
                                 client.getDocumentIdentifier(virtualFile), position, selected.text, selected.stamp,
                                 snapshots.map { DocumentUnionsParams(client.getDocumentIdentifier(it.file), it.text, it.stamp, false) },
                             ))
@@ -80,7 +80,7 @@ private fun captureEnumDocuments(project: Project, selected: VirtualFile): List<
         val manager = FileDocumentManager.getInstance()
         val files = FileEditorManager.getInstance(project).openFiles.toList() +
             manager.unsavedDocuments.mapNotNull(manager::getFile) + selected
-        files.distinct().filter { UnionBreezeLspProvider.supports(it) &&
+        files.distinct().filter { TypeBreezeLspProvider.supports(it) &&
             (it == selected || project.basePath?.let { base -> it.path.startsWith("$base/") } == true)
         }.mapNotNull { virtualFile -> manager.getDocument(virtualFile)?.let { EnumEditorSnapshot(virtualFile, it, it.modificationStamp, it.text) } }
     }
@@ -128,6 +128,6 @@ private fun Document.enumOffset(position: Position): Int? {
     return (getLineStartOffset(position.line) + position.character).takeIf { it <= getLineEndOffset(position.line) }
 }
 private fun enumConversionFailure(project: Project, message: String) {
-    NotificationGroupManager.getInstance().getNotificationGroup("UnionBreeze")
+    NotificationGroupManager.getInstance().getNotificationGroup("TypeBreeze")
         .createNotification("Enum to Union", message, NotificationType.WARNING).notify(project)
 }

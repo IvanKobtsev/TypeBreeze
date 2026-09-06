@@ -16,7 +16,7 @@ use std::{
     process::{Child, ChildStdin, ChildStdout, Command, Stdio},
     sync::{Arc, Mutex},
 };
-use unionbreeze_protocol::ResolvedLiteral;
+use typebreeze_protocol::ResolvedLiteral;
 use url::Url;
 
 fn main() -> Result<()> {
@@ -85,7 +85,13 @@ fn handle_notification(worker: &CompilerWorker, n: Notification) {
             }
         }
         DidCloseTextDocument::METHOD => {
-            if let Ok(_p) = serde_json::from_value::<DidCloseTextDocumentParams>(n.params) { /* retain workspace contribution */
+            if let Ok(p) = serde_json::from_value::<DidCloseTextDocumentParams>(n.params) {
+                worker
+                    .request("close", serde_json::json!({"uri":p.text_document.uri}))
+                    .unwrap_or_else(|error| {
+                        log(&format!("didClose update failed: {error:#}"));
+                        None
+                    });
             }
         }
         Exit::METHOD => {}
@@ -94,15 +100,28 @@ fn handle_notification(worker: &CompilerWorker, n: Notification) {
 }
 fn handle_request(connection: &Connection, worker: &CompilerWorker, req: Request) {
     let result = match req.method.as_str() {
-        "unionBreeze/documentUnions" => worker.request("documentUnions", req.params).ok().flatten(),
-        "unionBreeze/resolveLiteral" => worker.request("resolveLiteral", req.params).ok().flatten(),
-        "unionBreeze/navigationTargets" => worker
+        "typeBreeze/documentUnions" => worker.request("documentUnions", req.params).ok().flatten(),
+        "typeBreeze/resolveLiteral" => worker.request("resolveLiteral", req.params).ok().flatten(),
+        "typeBreeze/navigationTargets" => worker
             .request("navigationTargets", req.params)
             .ok()
             .flatten(),
-        "unionBreeze/renamePlan" => worker.request("renamePlan", req.params).ok().flatten(),
-        "unionBreeze/enumToUnionPlan" => {
+        "typeBreeze/renamePlan" => worker.request("renamePlan", req.params).ok().flatten(),
+        "typeBreeze/enumToUnionPlan" => {
             worker.request("enumToUnionPlan", req.params).ok().flatten()
+        }
+        method if extension_worker_method(method).is_some() => {
+            serde_json::from_value::<typebreeze_protocol::ExtensionCompletionParams>(req.params)
+                .ok()
+                .and_then(|params| {
+                    worker
+                        .request(
+                            extension_worker_method(method)?,
+                            serde_json::to_value(params).ok()?,
+                        )
+                        .ok()
+                        .flatten()
+                })
         }
         HoverRequest::METHOD => serde_json::from_value::<HoverParams>(req.params)
             .ok()
@@ -156,15 +175,22 @@ struct CompilerWorker {
 }
 impl CompilerWorker {
     fn start(root: &Path) -> Result<Self> {
-        let script = std::env::temp_dir().join(format!(
-            "unionbreeze-ts-worker-{}.cjs",
-            env!("CARGO_PKG_VERSION")
+        let directory = std::env::temp_dir().join(format!(
+            "typebreeze-ts-worker-{}-{}",
+            env!("CARGO_PKG_VERSION"),
+            std::process::id()
         ));
+        fs::create_dir_all(&directory)?;
+        let script = directory.join("worker.cjs");
+        fs::write(
+            directory.join("extensions.cjs"),
+            include_str!("../../../typescript-worker/extensions.cjs"),
+        )?;
         fs::write(
             &script,
             include_str!("../../../typescript-worker/worker.cjs"),
         )?;
-        let node = std::env::var_os("UNIONBREEZE_NODE").unwrap_or_else(|| "node".into());
+        let node = std::env::var_os("TYPEBREEZE_NODE").unwrap_or_else(|| "node".into());
         let mut child = Command::new(node)
             .arg(script)
             .stdin(Stdio::piped())
@@ -220,7 +246,33 @@ impl CompilerWorker {
     }
 }
 fn log(message: &str) {
-    if std::env::var_os("UNIONBREEZE_LOG").is_some() || std::env::var_os("RUST_LOG").is_some() {
-        eprintln!("[unionbreeze] {message}")
+    if std::env::var_os("TYPEBREEZE_LOG").is_some() || std::env::var_os("RUST_LOG").is_some() {
+        eprintln!("[typebreeze] {message}")
+    }
+}
+
+fn extension_worker_method(method: &str) -> Option<&'static str> {
+    match method {
+        "typeBreeze/extensionCompletions" => Some("extensionCompletions"),
+        "typeBreeze/extensionCallPlan" => Some("extensionCallPlan"),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn routes_extension_requests() {
+        assert_eq!(
+            extension_worker_method("typeBreeze/extensionCompletions"),
+            Some("extensionCompletions")
+        );
+        assert_eq!(
+            extension_worker_method("typeBreeze/extensionCallPlan"),
+            Some("extensionCallPlan")
+        );
+        assert_eq!(extension_worker_method("typeBreeze/resolveLiteral"), None);
     }
 }

@@ -4,13 +4,13 @@
 
 The public JetBrains resolver spike was rejected after real WebStorm 2026.2
 sessions returned no contextual type for representative literals even though
-fixture tests passed. UnionBreeze now treats its Rust language server as the
+fixture tests passed. TypeBreeze now treats its Rust language server as the
 sole semantic authority. No `ExpectedTypeEvaluator`, `JSType`, internal
 TypeScript service, or reflective API is used by the shipping adapter.
 
 ## Boundary
 
-`unionbreeze-lsp` owns synchronization and supervises an embedded JavaScript
+`typebreeze-lsp` owns synchronization and supervises an embedded JavaScript
 worker. That worker loads the workspace's TypeScript compiler, builds an
 incremental `Program`, and calls `TypeChecker.getContextualType()` for string
 literals. Rust validates and transports the results through the editor-neutral

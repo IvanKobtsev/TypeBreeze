@@ -7,6 +7,7 @@ let root = process.cwd();
 const overlays = new Map();
 let ts;
 let languageService;
+let extensionService;
 
 function loadTypeScript() {
   if (ts) return ts;
@@ -190,8 +191,13 @@ function renamePlan(params){
   return{oldValue,contextualTypeName:selected.contextualTypeName,targets};
 }
 async function handle(message) {
+  if (message.method === 'extensionCompletions' || message.method === 'extensionCallPlan') {
+    extensionService ??= require('./extensions.cjs')(loadTypeScript(), root, overlays);
+    return message.method === 'extensionCompletions' ? extensionService.completions(message.params) : extensionService.callPlan(message.params);
+  }
   if (message.method === 'initialize') { root = path.resolve(message.params.root); loadTypeScript(); languageService=createLanguageService(); return true; }
   if (message.method === 'update') { const file = path.resolve(fileURLToPath(message.params.uri)); overlays.set(file, { text: message.params.text, version: message.params.version }); return true; }
+  if (message.method === 'close') { overlays.delete(path.resolve(fileURLToPath(message.params.uri))); return true; }
   if (message.method === 'documentUnions') return documentUnions(message.params);
   if (message.method === 'resolveLiteral') return resolve(message.params);
   if (message.method === 'navigationTargets') return navigationTargets(message.params);

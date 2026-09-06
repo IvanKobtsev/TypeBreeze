@@ -1,34 +1,36 @@
 <idea-plugin>
-  <id>dev.unionbreeze</id>
-  <name>UnionBreeze</name>
-  <vendor url="https://github.com/IvanKobtsev/UnionBreeze">Ivan Kobtsev</vendor>
-  <description>Give TypeScript unions first-class IDE support through the UnionBreeze language server.</description>
+  <id>dev.typebreeze</id>
+  <name>TypeBreeze</name>
+  <vendor url="https://github.com/IvanKobtsev/TypeBreeze">Ivan Kobtsev</vendor>
+  <description>Enhance TypeScript with union tools and compiler-backed extension-method suggestions from .ext.ts and .ext.tsx files.</description>
   <depends>com.intellij.modules.ultimate</depends>
   <depends>com.intellij.modules.lsp</depends>
   <depends>JavaScript</depends>
   <extensions defaultExtensionNs="com.intellij">
-    <platform.lsp.integrationProvider implementation="dev.unionbreeze.webstorm.UnionBreezeLspProvider"/>
-    <gotoDeclarationHandler implementation="dev.unionbreeze.webstorm.UnionBreezeGotoDeclarationHandler"/>
-    <documentationProvider implementation="dev.unionbreeze.webstorm.UnionDocumentationProvider" order="first"/>
-    <platform.backend.documentation.targetProvider implementation="dev.unionbreeze.webstorm.UnionDocumentationTargetProvider" order="first"/>
-    <renameHandler implementation="dev.unionbreeze.webstorm.UnionBreezeRenameHandler"/>
-    <annotator language="TypeScript" implementationClass="dev.unionbreeze.webstorm.UnionBreezeAnnotator"/>
-    <colorSettingsPage implementation="dev.unionbreeze.webstorm.UnionBreezeColorSettingsPage"/>
-    <applicationConfigurable id="unionbreeze.settings" displayName="UnionBreeze" instance="dev.unionbreeze.webstorm.UnionBreezeConfigurable"/>
+    <completion.contributor language="TypeScript" implementationClass="dev.typebreeze.webstorm.ExtensionCompletionContributor" order="first"/>
+    <typedHandler implementation="dev.typebreeze.webstorm.ExtensionAutoPopup"/>
+    <platform.lsp.integrationProvider implementation="dev.typebreeze.webstorm.TypeBreezeLspProvider"/>
+    <gotoDeclarationHandler implementation="dev.typebreeze.webstorm.TypeBreezeGotoDeclarationHandler"/>
+    <documentationProvider implementation="dev.typebreeze.webstorm.UnionDocumentationProvider" order="first"/>
+    <platform.backend.documentation.targetProvider implementation="dev.typebreeze.webstorm.UnionDocumentationTargetProvider" order="first"/>
+    <renameHandler implementation="dev.typebreeze.webstorm.TypeBreezeRenameHandler"/>
+    <annotator language="TypeScript" implementationClass="dev.typebreeze.webstorm.TypeBreezeAnnotator"/>
+    <colorSettingsPage implementation="dev.typebreeze.webstorm.TypeBreezeColorSettingsPage"/>
+    <applicationConfigurable id="typebreeze.settings" displayName="TypeBreeze" instance="dev.typebreeze.webstorm.TypeBreezeConfigurable"/>
     <intentionAction>
       <language>TypeScript</language>
-      <className>dev.unionbreeze.webstorm.EnumToUnionIntention</className>
+      <className>dev.typebreeze.webstorm.EnumToUnionIntention</className>
       <category>TypeScript</category>
     </intentionAction>
     <intentionAction>
       <language>TypeScript</language>
-      <className>dev.unionbreeze.webstorm.ChangeUnionMemberIntention</className>
+      <className>dev.typebreeze.webstorm.ChangeUnionMemberIntention</className>
       <category>TypeScript</category>
     </intentionAction>
-    <notificationGroup id="UnionBreeze" displayType="BALLOON"/>
+    <notificationGroup id="TypeBreeze" displayType="BALLOON"/>
   </extensions>
   <actions>
-    <action id="dev.unionbreeze.webstorm.ChangeUnionMember" class="dev.unionbreeze.webstorm.ChangeUnionMemberAction" text="Change Union Member" description="Choose another contextual union member">
+    <action id="dev.typebreeze.webstorm.ChangeUnionMember" class="dev.typebreeze.webstorm.ChangeUnionMemberAction" text="Change Union Member" description="Choose another contextual union member">
       <keyboard-shortcut keymap="$default" first-keystroke="alt shift U"/>
       <add-to-group group-id="EditorPopupMenu" anchor="last"/>
     </action>

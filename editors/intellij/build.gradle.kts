@@ -6,7 +6,7 @@ plugins {
     id("org.jetbrains.kotlin.jvm") version "2.3.20"
     id("org.jetbrains.intellij.platform") version "2.18.1"
 }
-group = "dev.unionbreeze"
+group = "dev.typebreeze"
 version = "0.6.0"
 repositories { mavenCentral(); intellijPlatform { defaultRepositories() } }
 dependencies {
@@ -17,5 +17,10 @@ tasks.withType<KotlinCompile>().configureEach { compilerOptions.jvmTarget = JvmT
 intellijPlatform {
     instrumentCode = false
     pluginConfiguration { ideaVersion { sinceBuild = "262.9437.145"; untilBuild = "262.*" } }
-    pluginVerification { ides { recommended() } }
+    pluginVerification {
+        ides {
+            if (providers.gradleProperty("typebreeze.verifyCurrentIde").orNull == "true") current()
+            else recommended()
+        }
+    }
 }

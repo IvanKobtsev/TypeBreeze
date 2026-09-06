@@ -1,4 +1,4 @@
-package dev.unionbreeze.webstorm
+package dev.typebreeze.webstorm
 
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.eclipse.lsp4j.Position

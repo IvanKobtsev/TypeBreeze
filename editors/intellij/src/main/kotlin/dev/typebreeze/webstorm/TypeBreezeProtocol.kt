@@ -1,4 +1,4 @@
-package dev.unionbreeze.webstorm
+package dev.typebreeze.webstorm
 
 import org.eclipse.lsp4j.Range
 import org.eclipse.lsp4j.TextDocumentIdentifier
@@ -6,18 +6,34 @@ import org.eclipse.lsp4j.jsonrpc.services.JsonRequest
 import org.eclipse.lsp4j.services.LanguageServer
 import java.util.concurrent.CompletableFuture
 
-interface UnionBreezeLanguageServer : LanguageServer {
-    @JsonRequest("unionBreeze/documentUnions")
+interface TypeBreezeLanguageServer : LanguageServer {
+    @JsonRequest("typeBreeze/extensionCompletions")
+    fun extensionCompletions(params: ExtensionCompletionParams): CompletableFuture<ExtensionCompletions?>
+    @JsonRequest("typeBreeze/extensionCallPlan")
+    fun extensionCallPlan(params: ExtensionCompletionParams): CompletableFuture<ExtensionCallPlan?>
+    @JsonRequest("typeBreeze/documentUnions")
     fun documentUnions(params: DocumentUnionsParams): CompletableFuture<DocumentUnionsResponse?>
-    @JsonRequest("unionBreeze/resolveLiteral")
+    @JsonRequest("typeBreeze/resolveLiteral")
     fun resolveLiteral(params: ResolveLiteralParams): CompletableFuture<ResolvedLiteral?>
-    @JsonRequest("unionBreeze/navigationTargets")
+    @JsonRequest("typeBreeze/navigationTargets")
     fun navigationTargets(params:ResolveLiteralParams):CompletableFuture<List<SourceLocation>>
-    @JsonRequest("unionBreeze/renamePlan")
+    @JsonRequest("typeBreeze/renamePlan")
     fun renamePlan(params:RenamePlanParams):CompletableFuture<RenamePlan?>
-    @JsonRequest("unionBreeze/enumToUnionPlan")
+    @JsonRequest("typeBreeze/enumToUnionPlan")
     fun enumToUnionPlan(params:EnumToUnionParams):CompletableFuture<EnumToUnionPlan?>
 }
+
+data class ExtensionCompletionParams(val textDocument: TextDocumentIdentifier, val position: org.eclipse.lsp4j.Position,
+    val text: String, val clientVersion: Long, val documents: List<DocumentUnionsParams>,
+    val candidateId: String? = null, val snapshot: String? = null)
+data class ExtensionCompletions(val snapshot: String = "", val documents: List<EnumDocumentSnapshot> = emptyList(),
+    val candidates: List<ExtensionCandidate> = emptyList())
+data class ExtensionCandidate(val id: String = "", val name: String = "", val sourceModule: String = "",
+    val signature: String = "", val remainingParameters: String = "", val returnType: String = "",
+    val plan: ExtensionCallPlan = ExtensionCallPlan())
+data class ExtensionOffsetEdit(val start: Int = 0, val end: Int = 0, val expectedText: String = "", val newText: String = "")
+data class ExtensionCallPlan(val snapshot: String = "", val expectedText: String = "",
+    val edits: List<ExtensionOffsetEdit> = emptyList(), val caretOffset: Int = 0, val parameterInfo: Boolean = false)
 data class DocumentUnionsParams(val textDocument: TextDocumentIdentifier, val text:String, val clientVersion:Long, val includeUsages:Boolean=true)
 data class ResolveLiteralParams(val textDocument:TextDocumentIdentifier,val position:org.eclipse.lsp4j.Position,val text:String,val clientVersion:Long)
 data class RenamePlanParams(val textDocument:TextDocumentIdentifier,val position:org.eclipse.lsp4j.Position,val text:String,val clientVersion:Long,val newValue:String)

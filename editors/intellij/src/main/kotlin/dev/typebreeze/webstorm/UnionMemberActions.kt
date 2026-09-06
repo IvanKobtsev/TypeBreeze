@@ -1,4 +1,4 @@
-package dev.unionbreeze.webstorm
+package dev.typebreeze.webstorm
 
 import com.intellij.codeInsight.intention.IntentionAction
 import com.intellij.notification.NotificationGroupManager
@@ -37,7 +37,7 @@ class ChangeUnionMemberAction:AnAction(){
 }
 class ChangeUnionMemberIntention:IntentionAction {
     override fun getText()="Change Union Member"
-    override fun getFamilyName()="UnionBreeze"
+    override fun getFamilyName()="TypeBreeze"
     override fun startInWriteAction()=false
     override fun isAvailable(project:Project,editor:Editor?,file:PsiFile?):Boolean {val e=editor?:return false;val f=file?.virtualFile?:return false;return project.getService(UnionCache::class.java).at(f,e.document,e.caretModel.offset)!=null}
     @Throws(IncorrectOperationException::class) override fun invoke(project:Project,editor:Editor?,file:PsiFile?){requestAndShow(project,editor?:return,file?.virtualFile?:return,false)}
@@ -45,11 +45,11 @@ class ChangeUnionMemberIntention:IntentionAction {
 private fun requestAndShow(project:Project,editor:Editor,file:VirtualFile,notify:Boolean){
     val document=editor.document;val stamp=document.modificationStamp;val position=document.position(editor.caretModel.offset)
     AppExecutorUtil.getAppExecutorService().execute {
-        val clients=LspClientManager.getInstance(project).getClients(UnionBreezeLspProvider::class.java).filter{it.descriptor.isSupportedFile(file)}
-        val resolved=clients.firstNotNullOfOrNull { client -> runCatching { client.sendRequestSync(1_500){server->(server as UnionBreezeLanguageServer).resolveLiteral(ResolveLiteralParams(client.getDocumentIdentifier(file),position,document.text,stamp))} }.getOrNull() }
+        val clients=LspClientManager.getInstance(project).getClients(TypeBreezeLspProvider::class.java).filter{it.descriptor.isSupportedFile(file)}
+        val resolved=clients.firstNotNullOfOrNull { client -> runCatching { client.sendRequestSync(1_500){server->(server as TypeBreezeLanguageServer).resolveLiteral(ResolveLiteralParams(client.getDocumentIdentifier(file),position,document.text,stamp))} }.getOrNull() }
         ApplicationManager.getApplication().invokeLater {
             if(document.modificationStamp!=stamp)return@invokeLater
-            if(resolved==null||resolved.kind!="usage"||resolved.assignableMembers.size<2){if(notify)NotificationGroupManager.getInstance().getNotificationGroup("UnionBreeze").createNotification("No closed string union is available here.",NotificationType.INFORMATION).notify(project);return@invokeLater}
+            if(resolved==null||resolved.kind!="usage"||resolved.assignableMembers.size<2){if(notify)NotificationGroupManager.getInstance().getNotificationGroup("TypeBreeze").createNotification("No closed string union is available here.",NotificationType.INFORMATION).notify(project);return@invokeLater}
             project.getService(UnionCache::class.java).put(file,document,resolved);showPopup(project,editor,file,resolved,stamp)
         }
     }
@@ -76,7 +76,7 @@ class UnionCache(private val project:Project){
     private data class Entry(val stamp:Long,val literals:List<ResolvedLiteral>);private val entries=ConcurrentHashMap<String,Entry>()
     private val refreshing=ConcurrentHashMap.newKeySet<String>()
     private val requestLock=Any()
-    init { EditorFactory.getInstance().eventMulticaster.addDocumentListener(object:DocumentListener{override fun documentChanged(event:DocumentEvent){FileDocumentManager.getInstance().getFile(event.document)?.takeIf(UnionBreezeLspProvider::supports)?.let{entries.remove(it.url);refresh(it)}}},project) }
+    init { EditorFactory.getInstance().eventMulticaster.addDocumentListener(object:DocumentListener{override fun documentChanged(event:DocumentEvent){FileDocumentManager.getInstance().getFile(event.document)?.takeIf(TypeBreezeLspProvider::supports)?.let{entries.remove(it.url);refresh(it)}}},project) }
     fun put(file:VirtualFile,document:Document,literal:ResolvedLiteral){
         entries.compute(file.url){_,old->
             val retained=old?.takeIf{it.stamp==document.modificationStamp}?.literals.orEmpty().filterNot{it.kind==literal.kind&&it.range==literal.range}
@@ -101,7 +101,7 @@ class UnionCache(private val project:Project){
             }
             if(snapshot==null) { refreshing.remove(file.url); return@schedule }
             val (document,stamp,text)=snapshot
-            val clients=LspClientManager.getInstance(project).getClients(UnionBreezeLspProvider::class.java).filter{it.descriptor.isSupportedFile(file)}
+            val clients=LspClientManager.getInstance(project).getClients(TypeBreezeLspProvider::class.java).filter{it.descriptor.isSupportedFile(file)}
             if(clients.isEmpty()) {
                 if(attempt<5)scheduleRefresh(file,attempt+1,includeUsages) else refreshing.remove(file.url)
                 return@schedule
@@ -109,7 +109,7 @@ class UnionCache(private val project:Project){
             val response=synchronized(requestLock) {
                 clients.firstNotNullOfOrNull { client ->
                     runCatching { client.sendRequestSync(15_000) { server ->
-                        (server as UnionBreezeLanguageServer).documentUnions(DocumentUnionsParams(client.getDocumentIdentifier(file),text,stamp,includeUsages))
+                        (server as TypeBreezeLanguageServer).documentUnions(DocumentUnionsParams(client.getDocumentIdentifier(file),text,stamp,includeUsages))
                     } }.onFailure{LOG.warn("documentUnions failed for ${file.path}",it)}.getOrNull()
                 }
             }

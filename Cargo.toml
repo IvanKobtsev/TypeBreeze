@@ -1,7 +1,7 @@
 [workspace]
 members = [
-  "crates/unionbreeze-protocol",
-  "crates/unionbreeze-lsp",
+  "crates/typebreeze-protocol",
+  "crates/typebreeze-lsp",
 ]
 resolver = "2"
 
@@ -9,7 +9,7 @@ resolver = "2"
 version = "0.6.0"
 edition = "2024"
 license = "MIT"
-repository = "https://github.com/IvanKobtsev/UnionBreeze"
+repository = "https://github.com/IvanKobtsev/TypeBreeze"
 
 [workspace.dependencies]
 anyhow = "1"

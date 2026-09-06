@@ -6,7 +6,7 @@ const { pathToFileURL } = require('url');
 const { spawn } = require('child_process');
 const readline = require('readline');
 
-const root = fs.mkdtempSync(path.join(os.tmpdir(), 'unionbreeze-worker-'));
+const root = fs.mkdtempSync(path.join(os.tmpdir(), 'typebreeze-worker-'));
 fs.writeFileSync(path.join(root, 'tsconfig.json'), JSON.stringify({ compilerOptions: { strict: true } }));
 fs.writeFileSync(path.join(root, 'types.ts'), `
 export type ToastStyleType = 'normal' | 'wide';

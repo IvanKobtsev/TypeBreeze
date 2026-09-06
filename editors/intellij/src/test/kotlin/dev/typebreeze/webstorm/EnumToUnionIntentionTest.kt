@@ -1,4 +1,4 @@
-package dev.unionbreeze.webstorm
+package dev.typebreeze.webstorm
 
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.command.undo.UndoManager

@@ -1,3 +1,3 @@
 pluginManagement { repositories { gradlePluginPortal(); mavenCentral() } }
-rootProject.name = "unionbreeze-intellij"
+rootProject.name = "typebreeze-intellij"
 

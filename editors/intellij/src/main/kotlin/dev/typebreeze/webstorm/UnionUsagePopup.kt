@@ -1,4 +1,4 @@
-package dev.unionbreeze.webstorm
+package dev.typebreeze.webstorm
 
 import com.intellij.find.actions.ShowUsagesAction
 import com.intellij.find.actions.ShowUsagesActionHandler
@@ -19,7 +19,7 @@ import com.intellij.usages.UsageInfo2UsageAdapter
 import com.intellij.usages.UsageSearchPresentation
 import com.intellij.usages.UsageSearcher
 
-internal class UnionBreezeUsagesTarget(
+internal class TypeBreezeUsagesTarget(
     declaration: PsiElement,
     private val editor: Editor,
     usages: List<PsiElement>,
@@ -45,7 +45,7 @@ internal class UnionBreezeUsagesTarget(
             OpenFileDescriptor(usage.project, usageFile, usage.textOffset).navigate(requestFocus)
             return
         }
-        val handler = UnionBreezeShowUsagesHandler(declaration, validUsages)
+        val handler = TypeBreezeShowUsagesHandler(declaration, validUsages)
         val parameters = ShowUsagesParameters.initial(
             declaration.project,
             editor,
@@ -59,7 +59,7 @@ internal class UnionBreezeUsagesTarget(
     }
 }
 
-private class UnionBreezeShowUsagesHandler(
+private class TypeBreezeShowUsagesHandler(
     private val declaration: PsiElement,
     usageElements: List<PsiElement>,
 ) : ShowUsagesActionHandler {
@@ -71,7 +71,7 @@ private class UnionBreezeShowUsagesHandler(
     override fun getPresentation(): UsageSearchPresentation = object : UsageSearchPresentation {
         override fun getSearchTargetString(): String = declaration.text
 
-        override fun getOptionsString(): String = "UnionBreeze union member usages"
+        override fun getOptionsString(): String = "TypeBreeze union member usages"
     }
 
     override fun createUsageSearcher(): UsageSearcher = UsageSearcher { processor ->

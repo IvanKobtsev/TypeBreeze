@@ -1,4 +1,4 @@
-package dev.unionbreeze.webstorm
+package dev.typebreeze.webstorm
 
 import com.intellij.lang.documentation.AbstractDocumentationProvider
 import com.intellij.lang.javascript.psi.JSLiteralExpression
@@ -21,7 +21,7 @@ class UnionDocumentationTargetProvider : DocumentationTargetProvider {
         val literal = PsiTreeUtil.getParentOfType(leaf, JSLiteralExpression::class.java, false) ?: return emptyList()
         if (!literal.isStringLiteral) return emptyList()
         val virtualFile = file.virtualFile ?: return emptyList()
-        if (!UnionBreezeLspProvider.supports(virtualFile)) return emptyList()
+        if (!TypeBreezeLspProvider.supports(virtualFile)) return emptyList()
         val document = file.viewProvider.document ?: return emptyList()
         val member = file.project.getService(UnionCache::class.java).matching(virtualFile, document, literal.textRange)
             ?: return emptyList()

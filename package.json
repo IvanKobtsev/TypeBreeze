@@ -1,7 +1,9 @@
 {
   "private": true,
   "scripts": {
-    "test:compiler-worker": "node typescript-worker/test.cjs && node typescript-worker/enum-test.cjs"
+    "test:compiler-worker": "node typescript-worker/test.cjs && node typescript-worker/enum-test.cjs && node typescript-worker/extension-test.cjs",
+    "test:extensions": "node typescript-worker/extension-test.cjs",
+    "test:lsp": "node typescript-worker/lsp-test.cjs"
   },
   "devDependencies": {
     "typescript": "5.9.2"

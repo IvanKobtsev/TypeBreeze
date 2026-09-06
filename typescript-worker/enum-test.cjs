@@ -7,7 +7,7 @@ const { spawn } = require('child_process');
 const readline = require('readline');
 
 async function conversion(files, options = {}) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'unionbreeze-enum-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'typebreeze-enum-'));
   const child = spawn(process.execPath, [path.join(__dirname, 'worker.cjs')], { stdio: ['pipe', 'pipe', 'inherit'] });
   let id = 0;
   const pending = new Map();

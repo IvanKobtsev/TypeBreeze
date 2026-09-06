@@ -1,4 +1,4 @@
-package dev.unionbreeze.webstorm
+package dev.typebreeze.webstorm
 
 import com.intellij.codeInsight.navigation.actions.GotoDeclarationHandler
 import com.intellij.lang.javascript.psi.JSLiteralExpression
@@ -11,7 +11,7 @@ import com.intellij.psi.PsiManager
 import com.intellij.psi.util.PsiTreeUtil
 import org.eclipse.lsp4j.Position
 
-class UnionBreezeGotoDeclarationHandler:GotoDeclarationHandler {
+class TypeBreezeGotoDeclarationHandler:GotoDeclarationHandler {
     override fun getGotoDeclarationTargets(sourceElement:PsiElement?,offset:Int,editor:Editor?):Array<PsiElement>? {
         val element=sourceElement?:return null;val activeEditor=editor?:return null;val project=element.project
         val file=element.containingFile?.virtualFile?:return null;val document=activeEditor.document
@@ -33,7 +33,7 @@ class UnionBreezeGotoDeclarationHandler:GotoDeclarationHandler {
             val declaration=PsiTreeUtil.getParentOfType(element,JSLiteralExpression::class.java,false)?:element
             return when(targets.size) {
                 1 -> targets.toTypedArray()
-                else -> arrayOf(UnionBreezeUsagesTarget(declaration,activeEditor,targets))
+                else -> arrayOf(TypeBreezeUsagesTarget(declaration,activeEditor,targets))
             }
         }
         return targets.takeIf{it.isNotEmpty()}?.toTypedArray()

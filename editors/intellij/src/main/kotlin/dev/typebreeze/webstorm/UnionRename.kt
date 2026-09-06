@@ -1,4 +1,4 @@
-package dev.unionbreeze.webstorm
+package dev.typebreeze.webstorm
 
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
@@ -20,7 +20,7 @@ import com.intellij.refactoring.rename.RenameHandler
 import com.intellij.util.concurrency.AppExecutorUtil
 import org.eclipse.lsp4j.Position
 
-class UnionBreezeRenameHandler:RenameHandler {
+class TypeBreezeRenameHandler:RenameHandler {
     override fun isAvailableOnDataContext(dataContext:DataContext):Boolean {
         val project=CommonDataKeys.PROJECT.getData(dataContext)?:return false;val editor=CommonDataKeys.EDITOR.getData(dataContext)?:return false;val file=CommonDataKeys.VIRTUAL_FILE.getData(dataContext)?:return false
         return project.getService(UnionCache::class.java).navigationAt(file,editor.document,editor.caretModel.offset)!=null
@@ -30,7 +30,7 @@ class UnionBreezeRenameHandler:RenameHandler {
         val newValue=Messages.showInputDialog(project,"New value for '${cached.currentValue}':","Rename ${cached.contextualTypeName} Union Member",Messages.getQuestionIcon(),cached.currentValue,null)?.takeIf{it.isNotEmpty()&&it!=cached.currentValue}?:return
         val document=editor.document;val stamp=document.modificationStamp;val position=document.positionForRename(editor.caretModel.offset)
         AppExecutorUtil.getAppExecutorService().execute{
-            val plan=LspClientManager.getInstance(project).getClients(UnionBreezeLspProvider::class.java).filter{it.descriptor.isSupportedFile(virtualFile)}.firstNotNullOfOrNull{client->runCatching{client.sendRequestSync(5_000){server->(server as UnionBreezeLanguageServer).renamePlan(RenamePlanParams(client.getDocumentIdentifier(virtualFile),position,document.text,stamp,newValue))}}.getOrNull()}
+            val plan=LspClientManager.getInstance(project).getClients(TypeBreezeLspProvider::class.java).filter{it.descriptor.isSupportedFile(virtualFile)}.firstNotNullOfOrNull{client->runCatching{client.sendRequestSync(5_000){server->(server as TypeBreezeLanguageServer).renamePlan(RenamePlanParams(client.getDocumentIdentifier(virtualFile),position,document.text,stamp,newValue))}}.getOrNull()}
             ApplicationManager.getApplication().invokeLater{if(plan==null||document.modificationStamp!=stamp)notifyFailure(project)else applyPlan(project,plan,newValue)}
         }
     }
@@ -44,6 +44,6 @@ private fun applyPlan(project:Project,plan:RenamePlan,newValue:String){
     if(!FileModificationService.getInstance().prepareVirtualFilesForWrite(project,edits.map{it.file}.distinct()))return
     WriteCommandAction.runWriteCommandAction(project,Runnable{edits.groupBy{it.document}.forEach{(_,items)->items.sortedByDescending{it.start}.forEach{it.document.replaceString(it.start,it.end,it.replacement)}}})
 }
-private fun notifyFailure(project:Project)=NotificationGroupManager.getInstance().getNotificationGroup("UnionBreeze").createNotification("Union member rename was cancelled because its usages could not be resolved safely.",NotificationType.WARNING).notify(project)
+private fun notifyFailure(project:Project)=NotificationGroupManager.getInstance().getNotificationGroup("TypeBreeze").createNotification("Union member rename was cancelled because its usages could not be resolved safely.",NotificationType.WARNING).notify(project)
 private fun Document.positionForRename(offset:Int):Position{val line=getLineNumber(offset);return Position(line,offset-getLineStartOffset(line))}
 private fun Document.offsetForRename(position:Position):Int?{if(position.line<0||position.line>=lineCount)return null;return(getLineStartOffset(position.line)+position.character).takeIf{it<=getLineEndOffset(position.line)}}
