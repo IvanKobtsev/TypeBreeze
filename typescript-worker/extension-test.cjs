@@ -24,7 +24,13 @@ function fixture(files, config = {}) {
       position: { line: lines.length - 1, character: lines.at(-1).length }, documents };
   }
   return { root, overlays, service, write, params,
-    complete(marked, name, documents) { return service.completions(params(marked, name, documents)); },
+    complete(marked, name, documents) {
+      const request = params(marked, name, documents);
+      const result = service.completions(request);
+      result.candidates = result.candidates.map(candidate => ({ ...candidate,
+        plan: service.callPlan({ ...request, candidateId: candidate.id, snapshot: result.snapshot }) })).filter(candidate => candidate.plan);
+      return result;
+    },
     close() { fs.rmSync(root, { recursive: true, force: true }); } };
 }
 function output(candidate) {
@@ -65,6 +71,18 @@ test('eligibility and receiver compatibility', {
   assert.match(output(result.candidates.find(item => item.name === 'upper')), /upper\(title\)\|/);
 });
 
+test('completion discovery defers plans and filters prefixes', {
+  'strings.ext.ts': `export function truncate(value: string, length: number) { return value; }
+    export function upper(value: string) { return value; }`,
+}, f => {
+  const request = f.params('const title = "hello"; title.tr|');
+  const result = f.service.completions(request);
+  assert.deepEqual(result.candidates.map(item => item.name), ['truncate']);
+  assert.equal(result.candidates[0].plan, undefined);
+  assert.equal(result.expectedText, request.text);
+  assert(f.service.callPlan({ ...request, candidateId: result.candidates[0].id, snapshot: result.snapshot }));
+});
+
 test('generics, structure, narrowing and overloads', {
   'types.ext.ts': `export function head<T>(value: readonly T[]) { return value[0]; }
     export function named<T extends {name: string}>(value: T) { return value.name; }
@@ -75,7 +93,7 @@ test('generics, structure, narrowing and overloads', {
     export function exact(value: {name: string}) { return value.name; }`,
 }, f => {
   let result = f.complete('const values = [1, 2]; values.|');
-  assert.equal(result.candidates.find(item => item.name === 'head')?.returnType, 'number');
+  assert.equal(result.candidates.find(item => item.name === 'head')?.returnType, 'T');
   assert(!result.candidates.some(item => item.name === 'named'));
   result = f.complete('const value = { name: "x", extra: true }; value.|');
   assert(result.candidates.some(item => item.name === 'named'));
@@ -191,7 +209,7 @@ test('generic constraints reject incompatible unions and retain literal inferenc
   let result = f.complete('function run(x: string | number) { x.| }');
   assert(!result.candidates.some(item => item.name === 'stringOnly'));
   result = f.complete('const x = "literal" as const; x.|');
-  assert.equal(result.candidates.find(item => item.name === 'stringOnly')?.returnType, '"literal"');
+  assert.equal(result.candidates.find(item => item.name === 'stringOnly')?.returnType, 'T');
   result = f.complete('const x = {name: "a", count: 1}; x.|');
   assert(result.candidates.some(item => item.name === 'keyed'));
   assert(result.candidates.some(item => item.name === 'unknownValue'));

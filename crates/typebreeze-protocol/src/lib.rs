@@ -20,6 +20,8 @@ pub struct ExtensionCompletions {
     #[serde(default)]
     pub snapshot: String,
     #[serde(default)]
+    pub expected_text: String,
+    #[serde(default)]
     pub documents: Vec<EnumDocumentSnapshot>,
     pub candidates: Vec<ExtensionCandidate>,
 }
@@ -33,7 +35,8 @@ pub struct ExtensionCandidate {
     pub signature: String,
     pub remaining_parameters: String,
     pub return_type: String,
-    pub plan: ExtensionCallPlan,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<ExtensionCallPlan>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -179,7 +182,7 @@ mod tests {
     #[test]
     fn extension_wire_format_round_trips() {
         let json = serde_json::json!({
-            "snapshot": "abc", "documents": [], "candidates": [{
+            "snapshot": "abc", "expectedText": "value.", "documents": [], "candidates": [{
                 "id": "file:///project/string.ext.ts#0", "name": "trim",
                 "sourceModule": "string.ext.ts", "signature": "(value: string): string",
                 "remainingParameters": "", "returnType": "string", "plan": {

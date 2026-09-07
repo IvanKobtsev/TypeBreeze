@@ -62,20 +62,30 @@ class ExtensionCompletionContributor : CompletionContributor() {
             } catch (_: Exception) { null } ?: continue
             ProgressManager.checkCanceled()
             if (document.text != text) return
-            addExtensionCompletions(parameters, result, response, offset)
+            addExtensionCompletions(parameters, result, response, offset) { candidate ->
+                try {
+                    client.sendRequestSync(10_000) { server ->
+                        (server as TypeBreezeLanguageServer).extensionCallPlan(ExtensionCompletionParams(
+                            client.getDocumentIdentifier(file), Position(line, offset - document.getLineStartOffset(line)),
+                            text, document.modificationStamp, overlays, candidate.id, response.snapshot))
+                    }
+                } catch (cancelled: ProcessCanceledException) {
+                    throw cancelled
+                } catch (_: Exception) { null }
+            }
         }
     }
 }
 
 internal fun addExtensionCompletions(parameters: CompletionParameters, result: CompletionResultSet,
-    response: ExtensionCompletions, offset: Int) {
+    response: ExtensionCompletions, offset: Int, resolvePlan: ((ExtensionCandidate) -> ExtensionCallPlan?)? = null) {
     val guard = captureExtensionDependencies(response, parameters.editor)
-    val items = response.candidates.map { extensionLookupElement(it, response, offset, guard) }
+    val items = response.candidates.map { extensionLookupElement(it, response, offset, guard, resolvePlan) }
     // Reject an outdated selection before IntelliJ inserts the lookup string.
     LookupManager.getActiveLookup(parameters.editor)?.addLookupListener(object : LookupListener {
         override fun beforeItemSelected(event: LookupEvent): Boolean {
             if (event.item !in items) return true
-            return parameters.editor.document.text == response.candidates.firstOrNull()?.plan?.expectedText &&
+            return parameters.editor.document.text == response.expectedText &&
                 guard.current()
         }
     })
@@ -83,12 +93,12 @@ internal fun addExtensionCompletions(parameters: CompletionParameters, result: C
 }
 
 private fun extensionLookupElement(candidate: ExtensionCandidate, response: ExtensionCompletions, offset: Int,
-    guard: ExtensionDependencyGuard): LookupElement =
+    guard: ExtensionDependencyGuard, resolvePlan: ((ExtensionCandidate) -> ExtensionCallPlan?)?): LookupElement =
     LookupElementBuilder.create(candidate.id, candidate.name)
         .withPresentableText(candidate.name)
         .withTailText(" (${candidate.remainingParameters}) [extension · ${candidate.sourceModule}]", true)
         .withTypeText(candidate.returnType)
-        .withInsertHandler { context, _ -> insertExtension(context, candidate, response, offset, guard) }
+        .withInsertHandler { context, _ -> insertExtension(context, candidate, response, offset, guard, resolvePlan) }
         .withAutoCompletionPolicy(AutoCompletionPolicy.NEVER_AUTOCOMPLETE)
 
 private data class ExtensionDependency(val file: VirtualFile, val document: Document, val stamp: Long, val fileStamp: Long) {
@@ -135,24 +145,28 @@ class ExtensionAutoPopup : TypedHandlerDelegate() {
 }
 
 private fun insertExtension(context: InsertionContext, candidate: ExtensionCandidate, response: ExtensionCompletions, offset: Int,
-    guard: ExtensionDependencyGuard) {
+    guard: ExtensionDependencyGuard, resolvePlan: ((ExtensionCandidate) -> ExtensionCallPlan?)?) {
     context.setAddCompletionChar(false)
     val document = context.document
-    val before = candidate.plan.expectedText
+    val before = response.expectedText
     val start = context.startOffset
     if (start !in 0..offset || offset > before.length || context.tailOffset > document.textLength) return
     // Completion inserts its lookup text before invoking the handler. Restore that
     // prefix within the same command, then validate and apply the compiler's plan.
     val originalEnd = if (context.completionChar == '\t') {
-        candidate.plan.edits.firstOrNull { it.start <= start && it.end >= offset }?.end ?: offset
+        var end = offset
+        while (end < before.length && (before[end].isLetterOrDigit() || before[end] in "_$")) end++
+        end
     } else offset
     document.replaceString(start, context.tailOffset, before.substring(start, originalEnd))
-    if (document.text != before || response.snapshot != candidate.plan.snapshot) return
+    if (document.text != before) return
     if (!guard.dependenciesCurrent()) return
-    if (applyExtensionPlan(context.project, context.editor, candidate.plan)) {
-        context.tailOffset = candidate.plan.caretOffset
+    val plan = candidate.plan ?: resolvePlan?.invoke(candidate) ?: return
+    if (before != plan.expectedText || response.snapshot != plan.snapshot) return
+    if (applyExtensionPlan(context.project, context.editor, plan)) {
+        context.tailOffset = plan.caretOffset
         PsiDocumentManager.getInstance(context.project).commitDocument(document)
-        if (candidate.plan.parameterInfo) AutoPopupController.getInstance(context.project).autoPopupParameterInfo(context.editor, null)
+        if (plan.parameterInfo) AutoPopupController.getInstance(context.project).autoPopupParameterInfo(context.editor, null)
     }
 }
 

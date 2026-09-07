@@ -172,6 +172,7 @@ module.exports = function extensions(T, root, overlays) {
       if (target.isDeclarationFile || !/\.ext\.tsx?$/.test(target.fileName) || !scriptNames.includes(path.resolve(target.fileName))) continue;
       const exports = target.symbol ? checker.getExportsOfModule(target.symbol) : [];
       for (const declaration of sourceDeclarations(target)) {
+        if (ctx.prefix && !declaration.name.text.toLowerCase().startsWith(ctx.prefix.toLowerCase())) continue;
         const symbol = canonical(checker, checker.getSymbolAtLocation(declaration.name));
         if (!symbol || seen.has(symbol)) continue;
         seen.add(symbol);
@@ -184,15 +185,29 @@ module.exports = function extensions(T, root, overlays) {
         const reserved = new Set(checker.getSymbolsInScope(ctx.node, T.SymbolFlags.Value | T.SymbolFlags.Type | T.SymbolFlags.Alias).map(item => item.name));
         const access = binding(checker, source, ctx.node, symbol, target, exported?.name, reserved, declaration.name.text);
         if (!access) continue;
+        const preview = signatures.find(signature => signature.getDeclaration() && eligible(signature.getDeclaration()));
         discovered.push({ id: `${pathToFileURL(target.fileName).href}#${declaration.name.getStart(target)}`, name: declaration.name.text,
           sourceModule: path.relative(root, target.fileName).replaceAll('\\', '/'), sourceFile: target.fileName, access,
+          signature: preview ? checker.signatureToString(preview) : '',
+          remainingParameters: preview ? preview.parameters.slice(1).map(parameter => {
+            const parameterDeclaration = parameter.valueDeclaration ?? parameter.declarations?.[0];
+            return `${parameterDeclaration?.dotDotDotToken ? '...' : ''}${parameter.name}${parameter.flags & T.SymbolFlags.Optional || parameterDeclaration?.initializer ? '?' : ''}: ${checker.typeToString(checker.getTypeOfSymbolAtLocation(parameter, ctx.node))}`;
+          }).join(', ') : '',
+          returnType: preview ? checker.typeToString(checker.getReturnTypeOfSignature(preview)) : '',
           arities: [...new Set([1, ...signatures.filter(signature => signature.getDeclaration() && eligible(signature.getDeclaration()))
             .map(signature => Math.max(1, requiredArguments(checker, signature, ctx.node)))])].sort((a, b) => a - b) });
       }
     }
+    // Keep completion cheap: exact overload resolution and edit generation happen
+    // only after the user selects a candidate through extensionCallPlan.
+    if (!params.candidateId) return { snapshot, expectedText: source.text, documents, candidates: discovered.map(candidate => ({
+      id: candidate.id, name: candidate.name, sourceModule: candidate.sourceModule, signature: candidate.signature,
+      remainingParameters: candidate.remainingParameters, returnType: candidate.returnType,
+    })) };
     const candidates = [];
     // Each probe is an ordinary call in the original lexical/control-flow context.
     for (const candidate of discovered) {
+      if (candidate.id !== params.candidateId) continue;
       const { expression, importEdit } = candidate.access;
       for (const arity of candidate.arities) {
         // `never` placeholders satisfy trailing parameters without widening the
@@ -236,7 +251,7 @@ module.exports = function extensions(T, root, overlays) {
         } finally { probes.delete(file); }
       }
     }
-    return { snapshot, documents, candidates };
+    return { snapshot, expectedText: source.text, documents, candidates };
   }
   return {
     completions: compute,
