@@ -1,9 +1,75 @@
 # TypeBreeze
 
-TypeBreeze enhances the TypeScript editing experience in WebStorm with
-compiler-backed extension-method suggestions and dedicated union tools.
+TypeBreeze enhances the TypeScript editing experience in WebStorm with four
+compiler-backed feature areas: union intelligence, extension methods, mapping
+generation, and asset-import generation.
 
-## Extension methods
+| Feature | Status |
+| --- | --- |
+| Union intelligence | Feature-complete, but not yet stable |
+| TypeScript extension methods | In development |
+| Mapping auto-generation | Planning |
+| Asset-import auto-generation | Planning |
+
+## Union intelligence
+
+**Status: feature-complete, but not yet stable.** APIs, behavior, and editor
+integration may still change while the feature is hardened.
+
+TypeBreeze makes members of finite TypeScript string unions behave like semantic
+code elements instead of unrelated string literals. It resolves each declaration
+and contextual usage through the TypeScript compiler, then provides navigation,
+usage tracking, dedicated styling, and refactoring within the correct union
+domain. Identical strings belonging to other unions or ordinary string values
+remain separate.
+
+Standard **Go to Declaration** navigation takes a usage to its exact union-member
+declaration. Navigating from a declaration opens its matching references in
+WebStorm's native **Show Usages** popup, including the usage count, code preview,
+and navigation controls; when only one usage exists, TypeBreeze goes there
+directly. Hover documentation identifies the union and lists its available
+members.
+
+Union-member declarations and usages have their own color scheme entries under
+**Editor | Color Scheme | TypeBreeze**. Their styling can be enabled independently
+under **Settings | TypeBreeze**, and declarations with no resolved usages can be
+faded automatically. Highlighting appears before the workspace usage scan has
+finished; usage counts, unused-member fading, and declaration-to-usage navigation
+become available when that second pass completes.
+
+Use WebStorm's standard **Rename** command (`Shift+F6`) on a union member
+declaration or recognized usage to rename that member across its domain. The
+refactoring changes only literals that TypeScript resolves to the same declared
+union, validates every source token before writing, and applies all files as one
+undoable command. Unrelated identical strings are left untouched.
+
+Use **Alt+Enter → Enum to Union** on an enum declaration to convert it and its
+project references in one undoable operation. Values come from member names,
+not the old numeric or string initializers: `enum Status { draft = 10, live = 20 }`
+becomes `type Status = 'draft' | 'live'`. Member accesses become string literals,
+and computed object keys such as `[Status.draft]` become `draft`.
+
+The enum name, exports, member order, and comments are preserved. When object
+uses remain (for example `Object.values(Status)` or `typeof Status`), the action
+also creates a same-named `const` object checked with
+`as const satisfies { [K in Status]: K; }`. Type annotations alone do not require
+that object. Imports are removed when their last binding is removed; existing
+side-effect-only imports are left unchanged.
+Open unsaved documents are included in the plan. Reverse numeric lookups, member
+writes, ambient or merged declarations, and conversions that introduce TypeScript
+errors are rejected with an explanation. References outside the active project's
+editable workspace are not rewritten.
+
+Union intelligence applies when TypeScript resolves the assignable values to
+2–100 string literals, apart from `null` or `undefined` introduced by optional
+contexts. Mapped and utility types, generics, imports, path mappings, and nested
+object arguments work through TypeScript's own contextual type resolution rather
+than TypeBreeze-specific traversal rules.
+
+## TypeScript extension methods
+
+**Status: in development.** The current behavior is usable for development and
+testing, but its supported cases and editor experience are still being refined.
 
 Put ordinary functions in project files ending in **`.ext.ts`** or **`.ext.tsx`**
 and explicitly annotate their first argument:
@@ -37,48 +103,22 @@ default exports, unannotated or rest receivers, and functions requiring a bound
 optional chains do not offer extension suggestions. Generated code remains plain
 TypeScript and needs no TypeBreeze runtime.
 
-## Union tools
+## Mapping auto-generation
 
-TypeBreeze gives finite TypeScript string unions a dedicated closed-set member
-switcher in WebStorm. Place the caret on a contextually typed string literal and
-invoke **Change Union Member** through Alt+Enter or **Alt+Shift+U**.
+**Status: planning.** This feature will generate type-safe mapping code from
+TypeScript source information, reducing repetitive hand-written transformations
+while keeping the generated result explicit and reviewable. Its workflows,
+configuration, and supported mapping patterns have not been finalized and will
+be designed before implementation begins.
 
-Union members are styled separately from ordinary string literals. Declaration
-and usage styling can be enabled independently under **Settings | TypeBreeze**,
-and their colors/effects are configured under **Editor | Color Scheme |
-TypeBreeze**. Standard **Go to Declaration** navigation goes from a usage to
-its exact member declaration and from a declaration to its matching usages;
-Multiple declaration usages open in WebStorm's native **Show Usages** popup,
-with its standard code preview and navigation controls. A single usage is
-navigated to directly. Hover documentation identifies the literal's union and
-available members.
+## Asset-import auto-generation
 
-Highlighting is published before the workspace usage scan finishes. Unused
-declaration fading and declaration-to-usage navigation become available when
-that second pass completes.
+**Status: planning.** This feature will generate TypeScript imports and related
+code for project assets, keeping asset references synchronized without requiring
+developers to maintain import lists by hand. Supported asset types, output
+formats, and regeneration behavior will be specified before implementation.
 
-Use WebStorm's standard **Rename** command (`Shift+F6`) on a union member
-declaration or recognized usage to rename that member across its domain. The
-refactoring changes only literals that TypeScript resolves to the same declared
-union, validates every source token before writing, and applies all files as one
-undoable command. Unrelated identical strings are left untouched.
-
-Use **Alt+Enter → Enum to Union** on an enum declaration to convert it and its
-project references in one undoable operation. Values come from member names,
-not the old numeric or string initializers: `enum Status { draft = 10, live = 20 }`
-becomes `type Status = 'draft' | 'live'`. Member accesses become string literals,
-and computed object keys such as `[Status.draft]` become `draft`.
-
-The enum name, exports, member order, and comments are preserved. When object
-uses remain (for example `Object.values(Status)` or `typeof Status`), the action
-also creates a same-named `const` object checked with
-`as const satisfies { [K in Status]: K; }`. Type annotations alone do not require
-that object. Imports are removed when their last binding is removed; existing
-side-effect-only imports are left unchanged.
-Open unsaved documents are included in the plan. Reverse numeric lookups, member
-writes, ambient or merged declarations, and conversions that introduce TypeScript
-errors are rejected with an explanation. References outside the active project's
-editable workspace are not rewritten.
+## Architecture
 
 TypeScript semantics are provided by an editor-neutral Rust language server,
 which supervises a bundled compiler worker using the project's TypeScript
@@ -86,13 +126,9 @@ installation. The worker asks TypeScript directly for each literal's contextual
 type. The WebStorm plugin is a thin LSP and popup adapter and does not use
 JetBrains TypeScript type-resolution APIs.
 
-The resolver accepts contextual types whose assignable values reduce entirely
-to 2–100 string literals (apart from `null`/`undefined` introduced by optional
-contexts). Because TypeScript performs the contextual resolution, mapped and
-utility types, generics, imports, path mappings, and nested object arguments do
-not need TypeBreeze-specific traversal rules.
-
 ## Development
+
+This section is only for people who want to contribute to TypeBreeze.
 
 The project targets WebStorm 2026.2.1 (`262.9437.145`) and requires Rust stable,
 Gradle 9.4.1, and JDK 25.
