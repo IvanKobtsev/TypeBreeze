@@ -6,7 +6,10 @@ use lsp_types::{
     DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams, Hover,
     HoverContents, HoverParams, InitializeParams, MarkupContent, MarkupKind, ServerCapabilities,
     TextDocumentPositionParams, TextDocumentSyncCapability, TextDocumentSyncKind,
-    notification::{DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, Exit},
+    notification::{
+        DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, Exit, Initialized,
+        PublishDiagnostics,
+    },
     request::{GotoDefinition, HoverRequest},
 };
 use std::{
@@ -56,16 +59,18 @@ fn run(connection: &Connection, worker: Arc<CompilerWorker>) -> Result<()> {
                 }
                 handle_request(connection, &worker, req)
             }
-            Message::Notification(n) => handle_notification(&worker, n),
+            Message::Notification(n) => handle_notification(connection, &worker, n),
             Message::Response(_) => {}
         }
     }
     Ok(())
 }
-fn handle_notification(worker: &CompilerWorker, n: Notification) {
+fn handle_notification(connection: &Connection, worker: &CompilerWorker, n: Notification) {
     match n.method.as_str() {
+        Initialized::METHOD => publish_extension_diagnostics(connection, worker),
         DidOpenTextDocument::METHOD => {
             if let Ok(p) = serde_json::from_value::<DidOpenTextDocumentParams>(n.params) {
+                let extension_file = is_extension_file(&p.text_document.uri);
                 worker
                     .update(
                         &p.text_document.uri,
@@ -73,29 +78,59 @@ fn handle_notification(worker: &CompilerWorker, n: Notification) {
                         &p.text_document.text,
                     )
                     .unwrap_or_else(|error| log(&format!("didOpen update failed: {error:#}")));
+                if extension_file {
+                    publish_extension_diagnostics(connection, worker);
+                }
             }
         }
         DidChangeTextDocument::METHOD => {
             if let Ok(p) = serde_json::from_value::<DidChangeTextDocumentParams>(n.params)
                 && let Some(change) = p.content_changes.into_iter().last()
             {
+                let extension_file = is_extension_file(&p.text_document.uri);
                 worker
                     .update(&p.text_document.uri, p.text_document.version, &change.text)
                     .unwrap_or_else(|error| log(&format!("didChange update failed: {error:#}")));
+                if extension_file {
+                    publish_extension_diagnostics(connection, worker);
+                }
             }
         }
         DidCloseTextDocument::METHOD => {
             if let Ok(p) = serde_json::from_value::<DidCloseTextDocumentParams>(n.params) {
+                let extension_file = is_extension_file(&p.text_document.uri);
                 worker
                     .request("close", serde_json::json!({"uri":p.text_document.uri}))
                     .unwrap_or_else(|error| {
                         log(&format!("didClose update failed: {error:#}"));
                         None
                     });
+                if extension_file {
+                    publish_extension_diagnostics(connection, worker);
+                }
             }
         }
         Exit::METHOD => {}
         _ => {}
+    }
+}
+fn is_extension_file(uri: &Url) -> bool {
+    let path = uri.path().to_ascii_lowercase();
+    path.ends_with(".ext.ts") || path.ends_with(".ext.tsx")
+}
+fn publish_extension_diagnostics(connection: &Connection, worker: &CompilerWorker) {
+    let Ok(Some(serde_json::Value::Array(files))) =
+        worker.request("extensionDiagnostics", serde_json::json!({}))
+    else {
+        return;
+    };
+    for params in files {
+        let _ = connection
+            .sender
+            .send(Message::Notification(Notification::new(
+                PublishDiagnostics::METHOD.to_owned(),
+                params,
+            )));
     }
 }
 fn handle_request(connection: &Connection, worker: &CompilerWorker, req: Request) {
@@ -110,15 +145,12 @@ fn handle_request(connection: &Connection, worker: &CompilerWorker, req: Request
         "typeBreeze/enumToUnionPlan" => {
             worker.request("enumToUnionPlan", req.params).ok().flatten()
         }
-        method if extension_worker_method(method).is_some() => {
+        "typeBreeze/extensionCompletions" => {
             serde_json::from_value::<typebreeze_protocol::ExtensionCompletionParams>(req.params)
                 .ok()
                 .and_then(|params| {
                     worker
-                        .request(
-                            extension_worker_method(method)?,
-                            serde_json::to_value(params).ok()?,
-                        )
+                        .request("extensionCompletions", serde_json::to_value(params).ok()?)
                         .ok()
                         .flatten()
                 })
@@ -248,31 +280,5 @@ impl CompilerWorker {
 fn log(message: &str) {
     if std::env::var_os("TYPEBREEZE_LOG").is_some() || std::env::var_os("RUST_LOG").is_some() {
         eprintln!("[typebreeze] {message}")
-    }
-}
-
-fn extension_worker_method(method: &str) -> Option<&'static str> {
-    match method {
-        "typeBreeze/extensionCompletions" => Some("extensionCompletions"),
-        "typeBreeze/extensionCallPlan" => Some("extensionCallPlan"),
-        _ => None,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn routes_extension_requests() {
-        assert_eq!(
-            extension_worker_method("typeBreeze/extensionCompletions"),
-            Some("extensionCompletions")
-        );
-        assert_eq!(
-            extension_worker_method("typeBreeze/extensionCallPlan"),
-            Some("extensionCallPlan")
-        );
-        assert_eq!(extension_worker_method("typeBreeze/resolveLiteral"), None);
     }
 }

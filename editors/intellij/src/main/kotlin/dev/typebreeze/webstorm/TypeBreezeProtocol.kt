@@ -9,8 +9,6 @@ import java.util.concurrent.CompletableFuture
 interface TypeBreezeLanguageServer : LanguageServer {
     @JsonRequest("typeBreeze/extensionCompletions")
     fun extensionCompletions(params: ExtensionCompletionParams): CompletableFuture<ExtensionCompletions?>
-    @JsonRequest("typeBreeze/extensionCallPlan")
-    fun extensionCallPlan(params: ExtensionCompletionParams): CompletableFuture<ExtensionCallPlan?>
     @JsonRequest("typeBreeze/documentUnions")
     fun documentUnions(params: DocumentUnionsParams): CompletableFuture<DocumentUnionsResponse?>
     @JsonRequest("typeBreeze/resolveLiteral")
@@ -24,8 +22,7 @@ interface TypeBreezeLanguageServer : LanguageServer {
 }
 
 data class ExtensionCompletionParams(val textDocument: TextDocumentIdentifier, val position: org.eclipse.lsp4j.Position,
-    val text: String, val clientVersion: Long, val documents: List<DocumentUnionsParams>,
-    val candidateId: String? = null, val snapshot: String? = null)
+    val text: String, val clientVersion: Long, val documents: List<DocumentUnionsParams>)
 data class ExtensionCompletions(val snapshot: String = "", val expectedText: String = "",
     val documents: List<EnumDocumentSnapshot> = emptyList(),
     val candidates: List<ExtensionCandidate> = emptyList())

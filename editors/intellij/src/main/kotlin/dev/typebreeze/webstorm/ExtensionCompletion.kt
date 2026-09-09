@@ -25,7 +25,6 @@ import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.platform.lsp.api.LspClientManager
 import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiFile
-import com.intellij.psi.util.PsiModificationTracker
 import org.eclipse.lsp4j.Position
 
 class ExtensionCompletionContributor : CompletionContributor() {
@@ -62,25 +61,15 @@ class ExtensionCompletionContributor : CompletionContributor() {
             } catch (_: Exception) { null } ?: continue
             ProgressManager.checkCanceled()
             if (document.text != text) return
-            addExtensionCompletions(parameters, result, response, offset) { candidate ->
-                try {
-                    client.sendRequestSync(10_000) { server ->
-                        (server as TypeBreezeLanguageServer).extensionCallPlan(ExtensionCompletionParams(
-                            client.getDocumentIdentifier(file), Position(line, offset - document.getLineStartOffset(line)),
-                            text, document.modificationStamp, overlays, candidate.id, response.snapshot))
-                    }
-                } catch (cancelled: ProcessCanceledException) {
-                    throw cancelled
-                } catch (_: Exception) { null }
-            }
+            addExtensionCompletions(parameters, result, response, offset)
         }
     }
 }
 
 internal fun addExtensionCompletions(parameters: CompletionParameters, result: CompletionResultSet,
-    response: ExtensionCompletions, offset: Int, resolvePlan: ((ExtensionCandidate) -> ExtensionCallPlan?)? = null) {
+    response: ExtensionCompletions, offset: Int) {
     val guard = captureExtensionDependencies(response, parameters.editor)
-    val items = response.candidates.map { extensionLookupElement(it, response, offset, guard, resolvePlan) }
+    val items = response.candidates.map { extensionLookupElement(it, response, offset, guard) }
     // Reject an outdated selection before IntelliJ inserts the lookup string.
     LookupManager.getActiveLookup(parameters.editor)?.addLookupListener(object : LookupListener {
         override fun beforeItemSelected(event: LookupEvent): Boolean {
@@ -93,21 +82,20 @@ internal fun addExtensionCompletions(parameters: CompletionParameters, result: C
 }
 
 private fun extensionLookupElement(candidate: ExtensionCandidate, response: ExtensionCompletions, offset: Int,
-    guard: ExtensionDependencyGuard, resolvePlan: ((ExtensionCandidate) -> ExtensionCallPlan?)?): LookupElement =
+    guard: ExtensionDependencyGuard): LookupElement =
     LookupElementBuilder.create(candidate.id, candidate.name)
         .withPresentableText(candidate.name)
         .withTailText(" (${candidate.remainingParameters}) [extension · ${candidate.sourceModule}]", true)
         .withTypeText(candidate.returnType)
-        .withInsertHandler { context, _ -> insertExtension(context, candidate, response, offset, guard, resolvePlan) }
+        .withInsertHandler { context, _ -> insertExtension(context, candidate, response, offset, guard) }
         .withAutoCompletionPolicy(AutoCompletionPolicy.NEVER_AUTOCOMPLETE)
 
 private data class ExtensionDependency(val file: VirtualFile, val document: Document, val stamp: Long, val fileStamp: Long) {
     fun current() = file.isValid && file.modificationStamp == fileStamp && document.modificationStamp == stamp
 }
 
-private data class ExtensionDependencyGuard(val dependencies: List<ExtensionDependency>, val valid: Boolean,
-    val tracker: PsiModificationTracker, val generation: Long) {
-    fun current() = valid && tracker.modificationCount == generation && dependencies.all { it.current() }
+private data class ExtensionDependencyGuard(val dependencies: List<ExtensionDependency>, val valid: Boolean) {
+    fun current() = valid && dependencies.all { it.current() }
     // The lookup's own insertion changes PSI; only dependency stamps apply here.
     fun dependenciesCurrent() = valid && dependencies.all { it.current() }
 }
@@ -123,8 +111,7 @@ private fun captureExtensionDependencies(response: ExtensionCompletions, editor:
         if (file == null || document == null || document.text != snapshot.expectedText) valid = false
         else if (document !== editor.document) dependencies.add(ExtensionDependency(file, document, document.modificationStamp, file.modificationStamp))
     }
-    val tracker = PsiModificationTracker.getInstance(editor.project!!)
-    return ExtensionDependencyGuard(dependencies, valid, tracker, tracker.modificationCount)
+    return ExtensionDependencyGuard(dependencies, valid)
 }
 
 internal fun extensionDotContext(text: String, offset: Int): Boolean {
@@ -145,7 +132,7 @@ class ExtensionAutoPopup : TypedHandlerDelegate() {
 }
 
 private fun insertExtension(context: InsertionContext, candidate: ExtensionCandidate, response: ExtensionCompletions, offset: Int,
-    guard: ExtensionDependencyGuard, resolvePlan: ((ExtensionCandidate) -> ExtensionCallPlan?)?) {
+    guard: ExtensionDependencyGuard) {
     context.setAddCompletionChar(false)
     val document = context.document
     val before = response.expectedText
@@ -161,7 +148,7 @@ private fun insertExtension(context: InsertionContext, candidate: ExtensionCandi
     document.replaceString(start, context.tailOffset, before.substring(start, originalEnd))
     if (document.text != before) return
     if (!guard.dependenciesCurrent()) return
-    val plan = candidate.plan ?: resolvePlan?.invoke(candidate) ?: return
+    val plan = candidate.plan ?: return
     if (before != plan.expectedText || response.snapshot != plan.snapshot) return
     if (applyExtensionPlan(context.project, context.editor, plan)) {
         context.tailOffset = plan.caretOffset

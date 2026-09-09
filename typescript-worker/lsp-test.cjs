@@ -52,10 +52,9 @@ function request(method, params) {
     const params = { textDocument, position: { line: 0, character: text.length }, text, clientVersion: 1, documents: [] };
     const result = await request('typeBreeze/extensionCompletions', params);
     assert.equal(result.candidates[0].name, 'upper');
-    const plan = await request('typeBreeze/extensionCallPlan', { ...params, snapshot: result.snapshot, candidateId: result.candidates[0].id });
+    const plan = result.candidates[0].plan;
     assert.equal(plan.edits[0].newText, 'upper(title)');
     assert.match(plan.edits[1].newText, /import \{ upper \}/);
-    assert.equal(await request('typeBreeze/extensionCallPlan', { ...params, snapshot: 'stale', candidateId: result.candidates[0].id }), null);
     const unionText = "type Status = 'draft' | 'live'; const value: Status = 'draft';";
     const union = await request('typeBreeze/resolveLiteral', { textDocument, text: unionText, clientVersion: 2, position: { line: 0, character: unionText.lastIndexOf('draft') + 1 } });
     assert.equal(union.contextualTypeName, 'Status');

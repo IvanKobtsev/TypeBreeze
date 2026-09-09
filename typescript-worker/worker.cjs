@@ -191,12 +191,13 @@ function renamePlan(params){
   return{oldValue,contextualTypeName:selected.contextualTypeName,targets};
 }
 async function handle(message) {
-  if (message.method === 'extensionCompletions' || message.method === 'extensionCallPlan') {
+  if (message.method === 'extensionCompletions') {
     extensionService ??= require('./extensions.cjs')(loadTypeScript(), root, overlays);
-    return message.method === 'extensionCompletions' ? extensionService.completions(message.params) : extensionService.callPlan(message.params);
+    return extensionService.completions(message.params);
   }
-  if (message.method === 'initialize') { root = path.resolve(message.params.root); loadTypeScript(); languageService=createLanguageService(); return true; }
-  if (message.method === 'update') { const file = path.resolve(fileURLToPath(message.params.uri)); overlays.set(file, { text: message.params.text, version: message.params.version }); return true; }
+  if (message.method === 'extensionDiagnostics') return extensionService?.diagnostics() ?? [];
+  if (message.method === 'initialize') { root = path.resolve(message.params.root); loadTypeScript(); languageService=createLanguageService(); extensionService=require('./extensions.cjs')(ts,root,overlays);extensionService.initialize();return true; }
+  if (message.method === 'update') { const file = path.resolve(fileURLToPath(message.params.uri)); overlays.set(file, { text: message.params.text, version: message.params.version }); extensionService?.update(file); return true; }
   if (message.method === 'close') { overlays.delete(path.resolve(fileURLToPath(message.params.uri))); return true; }
   if (message.method === 'documentUnions') return documentUnions(message.params);
   if (message.method === 'resolveLiteral') return resolve(message.params);

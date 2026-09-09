@@ -15,12 +15,11 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
 class FixtureExtensionContributor : CompletionContributor() {
     override fun fillCompletionVariants(parameters: CompletionParameters, result: CompletionResultSet) {
         if (parameters.originalFile.name != "completion.ts") return
-        addExtensionCompletions(parameters, result, response, parameters.offset, resolvePlan)
+        addExtensionCompletions(parameters, result, response, parameters.offset)
     }
 
     companion object {
         var response = ExtensionCompletions()
-        var resolvePlan: ((ExtensionCandidate) -> ExtensionCallPlan?)? = null
     }
 }
 
@@ -35,7 +34,6 @@ class ExtensionCompletionTest : BasePlatformTestCase() {
     override fun tearDown() {
         try {
             FixtureExtensionContributor.response = ExtensionCompletions()
-            FixtureExtensionContributor.resolvePlan = null
         } finally { super.tearDown() }
     }
 
@@ -105,32 +103,6 @@ class ExtensionCompletionTest : BasePlatformTestCase() {
         val changed = document.text
         assertFalse(applyExtensionPlan(project, myFixture.editor, plan))
         assertEquals(changed, document.text)
-    }
-
-    fun testLazyPlanIsResolvedOnlyAfterSelection() {
-        prepare("const title = 'hello'; title.<caret>")
-        val plan = FixtureExtensionContributor.response.candidates.single().plan!!
-        var calls = 0
-        FixtureExtensionContributor.response = FixtureExtensionContributor.response.copy(candidates = listOf(
-            FixtureExtensionContributor.response.candidates.single().copy(plan = null)))
-        FixtureExtensionContributor.resolvePlan = { calls++; plan }
-        val items = myFixture.completeBasic()!!
-        assertEquals(0, calls)
-        myFixture.lookup.currentItem = items.first { it.lookupString == "truncate" }
-        myFixture.finishLookup('\n')
-        assertEquals(1, calls)
-        myFixture.checkResult("import { truncate } from './strings.ext';\nconst title = 'hello'; truncate(title)<caret>")
-    }
-
-    fun testRejectedLazyPlanRestoresOriginalExpression() {
-        prepare("const title = 'hello'; title.<caret>")
-        FixtureExtensionContributor.response = FixtureExtensionContributor.response.copy(candidates = listOf(
-            FixtureExtensionContributor.response.candidates.single().copy(plan = null)))
-        FixtureExtensionContributor.resolvePlan = { null }
-        val items = myFixture.completeBasic()!!
-        myFixture.lookup.currentItem = items.first { it.lookupString == "truncate" }
-        myFixture.finishLookup('\n')
-        myFixture.checkResult("const title = 'hello'; title.<caret>")
     }
 
     fun testDotTriggerExcludesOptionalAccess() {

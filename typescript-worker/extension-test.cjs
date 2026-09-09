@@ -26,12 +26,9 @@ function fixture(files, config = {}) {
   return { root, overlays, service, write, params,
     complete(marked, name, documents) {
       const request = params(marked, name, documents);
-      const result = service.completions(request);
-      result.candidates = result.candidates.map(candidate => ({ ...candidate,
-        plan: service.callPlan({ ...request, candidateId: candidate.id, snapshot: result.snapshot }) })).filter(candidate => candidate.plan);
-      return result;
+      return service.completions(request);
     },
-    close() { fs.rmSync(root, { recursive: true, force: true }); } };
+    close() { service.dispose(); fs.rmSync(root, { recursive: true, force: true }); } };
 }
 function output(candidate) {
   assert(candidate, 'Expected extension candidate');
@@ -71,19 +68,18 @@ test('eligibility and receiver compatibility', {
   assert.match(output(result.candidates.find(item => item.name === 'upper')), /upper\(title\)\|/);
 });
 
-test('completion discovery defers plans and filters prefixes', {
+test('completion discovery returns direct plans and filters prefixes', {
   'strings.ext.ts': `export function truncate(value: string, length: number) { return value; }
     export function upper(value: string) { return value; }`,
 }, f => {
   const request = f.params('const title = "hello"; title.tr|');
   const result = f.service.completions(request);
   assert.deepEqual(result.candidates.map(item => item.name), ['truncate']);
-  assert.equal(result.candidates[0].plan, undefined);
+  assert(result.candidates[0].plan);
   assert.equal(result.expectedText, request.text);
-  assert(f.service.callPlan({ ...request, candidateId: result.candidates[0].id, snapshot: result.snapshot }));
 });
 
-test('generics, structure, narrowing and overloads', {
+test('concrete structure and narrowing exclude generics and overloads', {
   'types.ext.ts': `export function head<T>(value: readonly T[]) { return value[0]; }
     export function named<T extends {name: string}>(value: T) { return value.name; }
     export function pair<T>(value: T, other: T) { return [value, other]; }
@@ -93,14 +89,14 @@ test('generics, structure, narrowing and overloads', {
     export function exact(value: {name: string}) { return value.name; }`,
 }, f => {
   let result = f.complete('const values = [1, 2]; values.|');
-  assert.equal(result.candidates.find(item => item.name === 'head')?.returnType, 'T');
+  assert(!result.candidates.some(item => item.name === 'head'));
   assert(!result.candidates.some(item => item.name === 'named'));
   result = f.complete('const value = { name: "x", extra: true }; value.|');
-  assert(result.candidates.some(item => item.name === 'named'));
+  assert(!result.candidates.some(item => item.name === 'named'));
   assert(result.candidates.some(item => item.name === 'exact'));
   result = f.complete('function run(value: string | number) { if (typeof value === "string") { value.| } }');
-  assert(result.candidates.some(item => item.name === 'overloaded'));
-  assert.match(output(result.candidates.find(item => item.name === 'pair')), /pair\(value, \|\)/);
+  assert(!result.candidates.some(item => item.name === 'overloaded'));
+  assert(!result.candidates.some(item => item.name === 'pair'));
 });
 
 test('imports, aliases, namespace bindings and name collisions', {
@@ -134,14 +130,14 @@ test('expression boundaries, optional arguments and excluded contexts', {
   }
 });
 
-test('project updates, unsaved source and stale plans', { 'strings.ext.ts': 'export function upper(value: string) { return value; }' }, f => {
+test('project updates and unsaved source', { 'strings.ext.ts': 'export function upper(value: string) { return value; }' }, f => {
   const params = f.params('const x = "x"; x.|');
   let result = f.service.completions(params);
-  const candidate = result.candidates[0];
-  assert(f.service.callPlan({ ...params, candidateId: candidate.id, snapshot: result.snapshot }));
   f.write('strings.ext.ts', 'export function upper(value: number) { return value; }');
-  assert.equal(f.service.callPlan({ ...params, candidateId: candidate.id, snapshot: result.snapshot }), null);
+  f.service.update(path.join(f.root, 'strings.ext.ts'));
+  assert.equal(f.service.completions(params).candidates.length, 0);
   f.write('new.ext.ts', 'export const fresh = (value: string) => value;');
+  f.service.update(path.join(f.root, 'new.ext.ts'));
   result = f.service.completions(params);
   assert.deepEqual(result.candidates.map(item => item.name), ['fresh']);
   fs.renameSync(path.join(f.root, 'new.ext.ts'), path.join(f.root, 'new.ts'));
@@ -200,7 +196,7 @@ test('type-only imports, defaults, renamed exports and compatible this', {
   assert(result.candidates.some(item => item.name === 'free'));
 });
 
-test('generic constraints reject incompatible unions and retain literal inference', {
+test('generic, any and unknown receivers are excluded', {
   'strings.ext.ts': `export function stringOnly<T extends string>(value: T) { return value; }
     export function keyed<T extends {name: string}>(value: T, key: keyof T) { return value[key]; }
     export function anyValue(value: any) { return value; }
@@ -209,10 +205,11 @@ test('generic constraints reject incompatible unions and retain literal inferenc
   let result = f.complete('function run(x: string | number) { x.| }');
   assert(!result.candidates.some(item => item.name === 'stringOnly'));
   result = f.complete('const x = "literal" as const; x.|');
-  assert.equal(result.candidates.find(item => item.name === 'stringOnly')?.returnType, 'T');
+  assert(!result.candidates.some(item => item.name === 'stringOnly'));
   result = f.complete('const x = {name: "a", count: 1}; x.|');
-  assert(result.candidates.some(item => item.name === 'keyed'));
-  assert(result.candidates.some(item => item.name === 'unknownValue'));
+  assert(!result.candidates.some(item => item.name === 'keyed'));
+  assert(!result.candidates.some(item => item.name === 'unknownValue'));
+  assert(!result.candidates.some(item => item.name === 'anyValue'));
 });
 
 test('same-named candidates and shebang/directive imports', {
@@ -225,12 +222,43 @@ test('same-named candidates and shebang/directive imports', {
   assert.match(output(result.candidates[0]), /^#!\/usr\/bin\/env node\n"use strict";\nimport /);
 });
 
-test('Windows dependency snapshots and UTF-16 receiver offsets', {
+test('narrow guards and UTF-16 receiver offsets', {
   'strings.ext.ts': 'export function upper(value: string) {\r\n  return value;\r\n}\r\n',
 }, f => {
   const result = f.complete('const emoji = "😀"; const value = "x"; value.|');
+  assert.equal(result.documents.length, 1);
   assert(result.documents.every(document => !document.expectedText.includes('\r')));
   assert.match(output(result.candidates[0]), /const emoji = "😀"; const value = "x"; upper\(value\)\|/);
+});
+
+test('extension index avoids repeated project scans', Object.fromEntries([
+  ...Array.from({ length: 100 }, (_, index) => [`ordinary-${index}.ts`, `export const value${index} = ${index};`]),
+  ['strings.ext.ts', 'export function upper(value: string) { return value; }'],
+]), f => {
+  f.service.initialize();
+  const scans = f.service.stats().projectScans;
+  for (let index = 0; index < 20; index++) assert.equal(f.complete('const value = "x"; value.|').candidates.length, 1);
+  assert.equal(f.service.stats().projectScans, scans);
+  assert.equal(f.service.stats().extensionFiles, 1);
+});
+
+test('ineligible extension diagnostics are specific and deduplicated', {
+  'invalid.ext.ts': `export function inferred(value = '') { return value; }
+    export function generic<T>(value: T) { return value; }
+    export function broad(value: any) { return value; }
+    export function rest(...value: string[]) { return value; }
+    export function bound(this: string, value: string) { return value; }
+    export function overloaded(value: string): string;
+    export function overloaded(value: number): number;
+    export function overloaded(value: string | number) { return value; }
+    export function valid(value: string | number) { return value; }`,
+}, f => {
+  const file = f.service.diagnostics().find(item => item.uri.endsWith('invalid.ext.ts'));
+  assert(file);
+  assert.equal(file.diagnostics.length, 6);
+  assert(file.diagnostics.every(item => item.severity === 2 && item.source === 'TypeBreeze' &&
+    item.message.endsWith('This function will not appear in TypeBreeze extension suggestions.')));
+  assert.equal(file.diagnostics.filter(item => item.message.startsWith('Overloaded')).length, 1);
 });
 
 console.log(`${assertions} extension scenarios passed`);

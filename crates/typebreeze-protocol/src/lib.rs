@@ -10,8 +10,6 @@ pub struct ExtensionCompletionParams {
     pub client_version: i64,
     #[serde(default)]
     pub documents: Vec<DocumentUnionsParams>,
-    pub candidate_id: Option<String>,
-    pub snapshot: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

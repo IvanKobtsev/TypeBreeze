@@ -89,8 +89,8 @@ and adds its import. Selecting `truncate` produces `truncate(title, )`, with the
 caret ready for the remaining argument and WebStorm parameter information.
 The call and import are one undoable edit.
 
-Suggestions use TypeScript's structural types, narrowing, generic inference,
-and overload resolution. Receivers can also be expressions such as `user.name`,
+Suggestions use TypeScript's structural types and control-flow narrowing.
+Receivers can also be expressions such as `user.name`,
 `getUser()`, or `items[0]`; the generated call evaluates the receiver once.
 Named functions, arrow functions, function expressions, named/default exports,
 and accessible local functions are supported. Existing imports and aliases are
@@ -98,8 +98,10 @@ reused, and name collisions receive an import alias.
 
 Discovery follows the active file's TypeScript project configuration and includes
 unsaved source. Dependency packages, declaration files, excluded files, anonymous
-default exports, unannotated or rest receivers, and functions requiring a bound
-`this` are not extension candidates. This version handles ordinary dot access;
+default exports, overloaded functions, unannotated or rest receivers, receivers
+containing type parameters, `any`, or `unknown`, and functions requiring a bound
+`this` are not extension candidates. TypeBreeze reports these exclusions as
+warnings in extension files. This version handles ordinary dot access;
 optional chains do not offer extension suggestions. Generated code remains plain
 TypeScript and needs no TypeBreeze runtime.
 
