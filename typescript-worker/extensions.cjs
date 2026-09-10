@@ -9,6 +9,8 @@ module.exports = function extensions(T, root, overlays) {
   let indexGeneration = 0;
   let projectScans = 0;
   let watcher;
+  let refreshTimer;
+  const pendingChanges = new Set();
   const declarations = new WeakMap();
   const read = file => overlays.get(path.resolve(file))?.text ?? T.sys.readFile(file);
   const exists = file => overlays.has(path.resolve(file)) || T.sys.fileExists(file);
@@ -30,6 +32,29 @@ module.exports = function extensions(T, root, overlays) {
     const start = source.getLineAndCharacterOfPosition(node.getStart(source));
     const end = source.getLineAndCharacterOfPosition(node.end);
     return { start, end };
+  }
+  function flushChanges() {
+    if (!pendingChanges.size) return;
+    if (refreshTimer) clearTimeout(refreshTimer);
+    refreshTimer = undefined;
+    const changes = [...pendingChanges]; pendingChanges.clear();
+    if (changes.some(file => /^(tsconfig|jsconfig)\.json$/i.test(path.basename(file)))) {
+      service?.dispose(); service = undefined; configKey = undefined;
+    } else {
+      service?.cleanupSemanticCache?.();
+      for (const file of changes.filter(file => /\.ext\.tsx?$/.test(file) && inside(file))) {
+        if (!extensionFiles.includes(file)) extensionFiles.push(file);
+        if (!scriptNames.includes(file)) scriptNames.push(file);
+      }
+    }
+    indexGeneration++;
+  }
+  function queueChange(changed) {
+    const file = path.isAbsolute(changed) ? path.resolve(changed) : path.resolve(root, changed);
+    if (!/\.(?:ts|tsx|json)$/i.test(file)) return;
+    pendingChanges.add(file);
+    if (refreshTimer) clearTimeout(refreshTimer);
+    refreshTimer = setTimeout(flushChanges, 75);
   }
   function inside(file) { const relative = path.relative(root, file); return relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative) && !relative.split(path.sep).includes('node_modules'); }
   function refresh(file) {
@@ -182,6 +207,7 @@ module.exports = function extensions(T, root, overlays) {
     return { expression: name, importEdit: { start, end: start, newText: `${start && source.text[start - 1] !== '\n' ? newline : ''}import ${text} from ${quote}${module}${quote};${newline}` } };
   }
   function compute(params) {
+    flushChanges();
     for (const document of params.documents ?? []) {
       const documentFile = path.resolve(fileURLToPath(document.textDocument.uri));
       overlays.set(documentFile, { text: document.text, version: document.clientVersion });
@@ -247,6 +273,7 @@ module.exports = function extensions(T, root, overlays) {
   return {
     completions: compute,
     diagnostics() {
+      flushChanges();
       const program = refresh(path.join(root, '__typebreeze__.ts'));
       const checker = program.getTypeChecker(), result = [];
       for (const extensionFile of extensionFiles) {
@@ -274,18 +301,9 @@ module.exports = function extensions(T, root, overlays) {
     },
     initialize() {
       refresh(path.join(root, '__typebreeze__.ts'));
-      watcher ??= T.sys.watchDirectory?.(root, changed => {
-        const file = path.resolve(changed);
-        if (/\.ext\.tsx?$/.test(file)) {
-          if (!extensionFiles.includes(file)) extensionFiles.push(file);
-          if (!scriptNames.includes(file)) scriptNames.push(file);
-          indexGeneration++;
-        } else if (/^(tsconfig|jsconfig)\.json$/i.test(path.basename(file))) {
-          service?.dispose(); service = undefined; configKey = undefined; indexGeneration++;
-        }
-      }, true);
+      watcher ??= T.sys.watchDirectory?.(root, queueChange, true);
     },
     stats() { return { projectScans, extensionFiles: extensionFiles.length, generation: indexGeneration }; },
-    dispose() { watcher?.close(); service?.dispose(); },
+    dispose() { if (refreshTimer) clearTimeout(refreshTimer); watcher?.close(); service?.dispose(); },
   };
 };

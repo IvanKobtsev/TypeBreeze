@@ -261,4 +261,20 @@ test('ineligible extension diagnostics are specific and deduplicated', {
   assert.equal(file.diagnostics.filter(item => item.message.startsWith('Overloaded')).length, 1);
 });
 
+test('imported concrete types and optional receivers remain eligible', {
+  'models.ts': 'export interface UserDto { firstName: string; email?: string }',
+  'UserDto.ext.ts': `import { UserDto } from './models';
+    export function getInitials(user: UserDto | null | undefined): string { return user?.firstName ?? ''; }
+    export function hasEmail(user: UserDto): boolean { return !!user.email; }`,
+}, f => {
+  assert.deepEqual(f.service.diagnostics().find(item => item.uri.endsWith('UserDto.ext.ts')).diagnostics, []);
+  const optional = f.complete(`import { UserDto } from './models';
+    declare const field: UserDto | undefined; field.|`);
+  assert(optional.candidates.some(item => item.name === 'getInitials'));
+  assert(!optional.candidates.some(item => item.name === 'hasEmail'));
+  const nullable = f.complete(`import { UserDto } from './models';
+    declare const field: UserDto | null; field.|`);
+  assert(nullable.candidates.some(item => item.name === 'getInitials'));
+});
+
 console.log(`${assertions} extension scenarios passed`);

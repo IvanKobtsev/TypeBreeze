@@ -37,49 +37,65 @@ fn main() -> Result<()> {
         .and_then(|folder| folder.uri.to_file_path().ok())
         .or_else(|| std::env::current_dir().ok())
         .context("no workspace root")?;
-    let worker = CompilerWorker::start(&root)
-        .map(Arc::new)
-        .map_err(|error| {
-            log(&format!(
-                "TypeScript compiler worker unavailable: {error:#}"
-            ));
-            error
-        })?;
-    log("TypeScript compiler worker ready");
-    run(&connection, worker)?;
+    let workers = RuntimeWorkers {
+        semantics: CompilerWorker::start(&root, false)
+            .map(Arc::new)
+            .map_err(|error| {
+                log(&format!(
+                    "TypeScript compiler worker unavailable: {error:#}"
+                ));
+                error
+            })?,
+        extensions: CompilerWorker::start(&root, true)
+            .map(Arc::new)
+            .map_err(|error| {
+                log(&format!(
+                    "TypeScript extension worker unavailable: {error:#}"
+                ));
+                error
+            })?,
+    };
+    log("TypeScript compiler workers ready");
+    run(&connection, Arc::new(workers))?;
     io.join().context("join LSP IO")?;
     Ok(())
 }
-fn run(connection: &Connection, worker: Arc<CompilerWorker>) -> Result<()> {
+struct RuntimeWorkers {
+    semantics: Arc<CompilerWorker>,
+    extensions: Arc<CompilerWorker>,
+}
+fn run(connection: &Connection, workers: Arc<RuntimeWorkers>) -> Result<()> {
     for msg in &connection.receiver {
         match msg {
             Message::Request(req) => {
                 if connection.handle_shutdown(&req)? {
                     return Ok(());
                 }
-                handle_request(connection, &worker, req)
+                handle_request(connection, &workers, req)
             }
-            Message::Notification(n) => handle_notification(connection, &worker, n),
+            Message::Notification(n) => handle_notification(connection, &workers, n),
             Message::Response(_) => {}
         }
     }
     Ok(())
 }
-fn handle_notification(connection: &Connection, worker: &CompilerWorker, n: Notification) {
+fn handle_notification(connection: &Connection, workers: &RuntimeWorkers, n: Notification) {
     match n.method.as_str() {
-        Initialized::METHOD => publish_extension_diagnostics(connection, worker),
+        Initialized::METHOD => publish_extension_diagnostics(connection, &workers.extensions),
         DidOpenTextDocument::METHOD => {
             if let Ok(p) = serde_json::from_value::<DidOpenTextDocumentParams>(n.params) {
                 let extension_file = is_extension_file(&p.text_document.uri);
-                worker
-                    .update(
-                        &p.text_document.uri,
-                        p.text_document.version,
-                        &p.text_document.text,
-                    )
-                    .unwrap_or_else(|error| log(&format!("didOpen update failed: {error:#}")));
+                for worker in [&workers.extensions, &workers.semantics] {
+                    worker
+                        .update(
+                            &p.text_document.uri,
+                            p.text_document.version,
+                            &p.text_document.text,
+                        )
+                        .unwrap_or_else(|error| log(&format!("didOpen update failed: {error:#}")));
+                }
                 if extension_file {
-                    publish_extension_diagnostics(connection, worker);
+                    publish_extension_diagnostics(connection, &workers.extensions);
                 }
             }
         }
@@ -88,25 +104,31 @@ fn handle_notification(connection: &Connection, worker: &CompilerWorker, n: Noti
                 && let Some(change) = p.content_changes.into_iter().last()
             {
                 let extension_file = is_extension_file(&p.text_document.uri);
-                worker
-                    .update(&p.text_document.uri, p.text_document.version, &change.text)
-                    .unwrap_or_else(|error| log(&format!("didChange update failed: {error:#}")));
+                for worker in [&workers.extensions, &workers.semantics] {
+                    worker
+                        .update(&p.text_document.uri, p.text_document.version, &change.text)
+                        .unwrap_or_else(|error| {
+                            log(&format!("didChange update failed: {error:#}"))
+                        });
+                }
                 if extension_file {
-                    publish_extension_diagnostics(connection, worker);
+                    publish_extension_diagnostics(connection, &workers.extensions);
                 }
             }
         }
         DidCloseTextDocument::METHOD => {
             if let Ok(p) = serde_json::from_value::<DidCloseTextDocumentParams>(n.params) {
                 let extension_file = is_extension_file(&p.text_document.uri);
-                worker
-                    .request("close", serde_json::json!({"uri":p.text_document.uri}))
-                    .unwrap_or_else(|error| {
-                        log(&format!("didClose update failed: {error:#}"));
-                        None
-                    });
+                for worker in [&workers.extensions, &workers.semantics] {
+                    worker
+                        .request("close", serde_json::json!({"uri":p.text_document.uri}))
+                        .unwrap_or_else(|error| {
+                            log(&format!("didClose update failed: {error:#}"));
+                            None
+                        });
+                }
                 if extension_file {
-                    publish_extension_diagnostics(connection, worker);
+                    publish_extension_diagnostics(connection, &workers.extensions);
                 }
             }
         }
@@ -133,7 +155,8 @@ fn publish_extension_diagnostics(connection: &Connection, worker: &CompilerWorke
             )));
     }
 }
-fn handle_request(connection: &Connection, worker: &CompilerWorker, req: Request) {
+fn handle_request(connection: &Connection, workers: &RuntimeWorkers, req: Request) {
+    let worker = &workers.semantics;
     let result = match req.method.as_str() {
         "typeBreeze/documentUnions" => worker.request("documentUnions", req.params).ok().flatten(),
         "typeBreeze/resolveLiteral" => worker.request("resolveLiteral", req.params).ok().flatten(),
@@ -146,14 +169,23 @@ fn handle_request(connection: &Connection, worker: &CompilerWorker, req: Request
             worker.request("enumToUnionPlan", req.params).ok().flatten()
         }
         "typeBreeze/extensionCompletions" => {
-            serde_json::from_value::<typebreeze_protocol::ExtensionCompletionParams>(req.params)
-                .ok()
-                .and_then(|params| {
-                    worker
-                        .request("extensionCompletions", serde_json::to_value(params).ok()?)
-                        .ok()
-                        .flatten()
-                })
+            let result = serde_json::from_value::<typebreeze_protocol::ExtensionCompletionParams>(
+                req.params,
+            )
+            .ok()
+            .and_then(|params| {
+                workers
+                    .extensions
+                    .request("extensionCompletions", serde_json::to_value(params).ok()?)
+                    .ok()
+                    .flatten()
+            });
+            // File-system changes (notably a Git branch switch) do not always
+            // arrive as didChange notifications for unopened extension files.
+            // Refresh diagnostics whenever the already-hot extension index is
+            // queried so stale warnings are cleared without restarting the IDE.
+            publish_extension_diagnostics(connection, &workers.extensions);
+            result
         }
         HoverRequest::METHOD => serde_json::from_value::<HoverParams>(req.params)
             .ok()
@@ -206,7 +238,7 @@ struct CompilerWorker {
     process: Mutex<WorkerProcess>,
 }
 impl CompilerWorker {
-    fn start(root: &Path) -> Result<Self> {
+    fn start(root: &Path, extensions: bool) -> Result<Self> {
         let directory = std::env::temp_dir().join(format!(
             "typebreeze-ts-worker-{}-{}",
             env!("CARGO_PKG_VERSION"),
@@ -240,7 +272,10 @@ impl CompilerWorker {
                 next_id: 1,
             }),
         };
-        worker.request("initialize", serde_json::json!({"root":root}))?;
+        worker.request(
+            "initialize",
+            serde_json::json!({"root":root,"extensions":extensions}),
+        )?;
         Ok(worker)
     }
     fn update(&self, uri: &Url, version: i32, text: &str) -> Result<()> {
