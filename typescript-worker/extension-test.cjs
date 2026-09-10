@@ -314,6 +314,27 @@ test('optional access only offers null-safe extension receivers', {
   result = f.complete('const value = "x"; value.|');
   assert(result.candidates.some(item => item.name === 'ordinary'));
   assert(result.candidates.some(item => item.name === 'undefinedUnion'));
+  result = f.complete(`function render(value: string | undefined) {
+    value?.|
+    return '';
+  }`);
+  assert.deepEqual(result.candidates.map(item => item.name).sort(), ['nullable', 'optional', 'undefinedUnion']);
+});
+
+test('extension styling resolves eligible declarations and aliased calls', {
+  'strings.ext.ts': `export function upper(value: string) { return value.toUpperCase(); }
+    export function generic<T>(value: T) { return value; }`,
+}, f => {
+  const use = f.params(`import { upper as extensionUpper } from './strings.ext';
+    function upper(value: string) { return value; }
+    extensionUpper('x'); upper('x');|`);
+  const calls = f.service.documentExtensions(use).occurrences;
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].kind, 'call');
+  const declaration = f.params(`export function upper(value: string) { return value; }
+    export function generic<T>(value: T) { return value; }|`, 'strings.ext.ts');
+  const declarations = f.service.documentExtensions(declaration).occurrences;
+  assert.deepEqual(declarations.map(item => item.kind), ['declaration']);
 });
 
 console.log(`${assertions} extension scenarios passed`);

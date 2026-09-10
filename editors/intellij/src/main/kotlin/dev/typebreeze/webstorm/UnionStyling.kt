@@ -28,6 +28,7 @@ object TypeBreezeColors {
     val DECLARATION=TextAttributesKey.createTextAttributesKey("TYPEBREEZE_DECLARATION",DefaultLanguageHighlighterColors.STRING)
     val USAGE=TextAttributesKey.createTextAttributesKey("TYPEBREEZE_USAGE",DefaultLanguageHighlighterColors.STRING)
     val UNUSED_DECLARATION=TextAttributesKey.createTextAttributesKey("TYPEBREEZE_UNUSED_DECLARATION",CodeInsightColors.NOT_USED_ELEMENT_ATTRIBUTES)
+    val EXTENSION_METHOD=TextAttributesKey.createTextAttributesKey("TYPEBREEZE_EXTENSION_METHOD",DefaultLanguageHighlighterColors.INSTANCE_METHOD)
 }
 
 class TypeBreezeColorSettingsPage:ColorSettingsPage {
@@ -35,9 +36,11 @@ class TypeBreezeColorSettingsPage:ColorSettingsPage {
     override fun getHighlighter():SyntaxHighlighter=PlainSyntaxHighlighter()
     override fun getDemoText()="""type Status = <unionDeclaration>'draft'</unionDeclaration> | <unusedUnionDeclaration>'published'</unusedUnionDeclaration>;
 const status: Status = <unionUsage>'draft'</unionUsage>;
-const ordinary = 'draft';"""
-    override fun getAdditionalHighlightingTagToDescriptorMap()=mapOf("unionDeclaration" to TypeBreezeColors.DECLARATION,"unusedUnionDeclaration" to TypeBreezeColors.UNUSED_DECLARATION,"unionUsage" to TypeBreezeColors.USAGE)
-    override fun getAttributeDescriptors()=arrayOf(AttributesDescriptor("Union member declaration",TypeBreezeColors.DECLARATION),AttributesDescriptor("Unused union member declaration",TypeBreezeColors.UNUSED_DECLARATION),AttributesDescriptor("Union member usage",TypeBreezeColors.USAGE))
+const ordinary = 'draft';
+function <extensionMethod>truncate</extensionMethod>(value: string, length: number) { return value.slice(0, length); }
+<extensionMethod>truncate</extensionMethod>('hello', 3);"""
+    override fun getAdditionalHighlightingTagToDescriptorMap()=mapOf("unionDeclaration" to TypeBreezeColors.DECLARATION,"unusedUnionDeclaration" to TypeBreezeColors.UNUSED_DECLARATION,"unionUsage" to TypeBreezeColors.USAGE,"extensionMethod" to TypeBreezeColors.EXTENSION_METHOD)
+    override fun getAttributeDescriptors()=arrayOf(AttributesDescriptor("Union member declaration",TypeBreezeColors.DECLARATION),AttributesDescriptor("Unused union member declaration",TypeBreezeColors.UNUSED_DECLARATION),AttributesDescriptor("Union member usage",TypeBreezeColors.USAGE),AttributesDescriptor("Extension method declaration and call",TypeBreezeColors.EXTENSION_METHOD))
     override fun getColorDescriptors():Array<ColorDescriptor> = ColorDescriptor.EMPTY_ARRAY
     override fun getDisplayName()="TypeBreeze"
 }
@@ -55,12 +58,12 @@ class TypeBreezeAnnotator:Annotator {
 @Service(Service.Level.APP)
 @State(name="TypeBreezeSettings",storages=[Storage("typebreeze.xml")])
 class TypeBreezeSettings:PersistentStateComponent<TypeBreezeSettings.Options> {
-    data class Options(var styleDeclarations:Boolean=true,var styleUsages:Boolean=true,var fadeUnusedDeclarations:Boolean=true)
+    data class Options(var styleDeclarations:Boolean=true,var styleUsages:Boolean=true,var fadeUnusedDeclarations:Boolean=true,var styleExtensionMethods:Boolean=true)
     private var options=Options();override fun getState()=options;override fun loadState(state:Options){options=state}
     companion object { val instance:TypeBreezeSettings get()=ApplicationManager.getApplication().getService(TypeBreezeSettings::class.java) }
 }
 
 class TypeBreezeConfigurable:BoundConfigurable("TypeBreeze") {
-    override fun createPanel()=panel { val settings=TypeBreezeSettings.instance.state;row{checkBox("Style union member declarations").bindSelected(settings::styleDeclarations)};row{checkBox("Fade declarations without usages").bindSelected(settings::fadeUnusedDeclarations)};row{checkBox("Style contextual union member usages").bindSelected(settings::styleUsages)} }
+    override fun createPanel()=panel { val settings=TypeBreezeSettings.instance.state;row{checkBox("Style union member declarations").bindSelected(settings::styleDeclarations)};row{checkBox("Fade declarations without usages").bindSelected(settings::fadeUnusedDeclarations)};row{checkBox("Style contextual union member usages").bindSelected(settings::styleUsages)};row{checkBox("Style extension method declarations and calls").bindSelected(settings::styleExtensionMethods)} }
     override fun apply(){super.apply();ProjectManager.getInstance().openProjects.forEach{com.intellij.codeInsight.daemon.DaemonCodeAnalyzer.getInstance(it).restart()}}
 }

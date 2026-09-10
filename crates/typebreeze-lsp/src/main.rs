@@ -187,6 +187,11 @@ fn handle_request(connection: &Connection, workers: &RuntimeWorkers, req: Reques
             publish_extension_diagnostics(connection, &workers.extensions);
             result
         }
+        "typeBreeze/documentExtensions" => workers
+            .extensions
+            .request("documentExtensions", req.params)
+            .ok()
+            .flatten(),
         HoverRequest::METHOD => serde_json::from_value::<HoverParams>(req.params)
             .ok()
             .and_then(|p| hover_result(worker, &p.text_document_position_params))

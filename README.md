@@ -96,6 +96,10 @@ Named functions, arrow functions, function expressions, named/default exports,
 and accessible local functions are supported. Existing imports and aliases are
 reused, and name collisions receive an import alias.
 
+Eligible extension declarations and resolved calls have their own color-scheme
+entry under **Editor | Color Scheme | TypeBreeze**. Styling can be toggled under
+**Settings | TypeBreeze**; ordinary functions with the same name are unaffected.
+
 Discovery follows the active file's TypeScript project configuration and includes
 unsaved source. Dependency packages, declaration files, excluded files, anonymous
 default exports, overloaded functions, unannotated or rest receivers, receivers

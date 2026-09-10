@@ -66,6 +66,25 @@ pub struct DocumentUnionsParams {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DocumentExtensionsResponse {
+    pub client_version: Option<i64>,
+    pub generation: u64,
+    pub occurrences: Vec<ExtensionOccurrence>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtensionOccurrence {
+    pub range: Range,
+    pub kind: ExtensionOccurrenceKind,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ExtensionOccurrenceKind {
+    Declaration,
+    Call,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ResolveLiteralParams {
     pub text_document: lsp_types::TextDocumentIdentifier,
     pub position: lsp_types::Position,

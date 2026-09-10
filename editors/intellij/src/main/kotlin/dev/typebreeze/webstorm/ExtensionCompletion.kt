@@ -13,6 +13,7 @@ import com.intellij.codeInsight.lookup.LookupElement
 import com.intellij.codeInsight.lookup.LookupEvent
 import com.intellij.codeInsight.lookup.LookupListener
 import com.intellij.codeInsight.lookup.LookupManager
+import com.intellij.codeInsight.lookup.PrioritizedLookupElement
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.Document
@@ -82,13 +83,15 @@ internal fun addExtensionCompletions(parameters: CompletionParameters, result: C
 }
 
 private fun extensionLookupElement(candidate: ExtensionCandidate, response: ExtensionCompletions, offset: Int,
-    guard: ExtensionDependencyGuard): LookupElement =
+    guard: ExtensionDependencyGuard): LookupElement = PrioritizedLookupElement.withPriority(
     LookupElementBuilder.create(candidate.id, candidate.name)
         .withPresentableText(candidate.name)
         .withTailText(" (${candidate.remainingParameters}) [extension · ${candidate.sourceModule}]", true)
         .withTypeText(candidate.returnType)
         .withInsertHandler { context, _ -> insertExtension(context, candidate, response, offset, guard) }
-        .withAutoCompletionPolicy(AutoCompletionPolicy.NEVER_AUTOCOMPLETE)
+        .withAutoCompletionPolicy(AutoCompletionPolicy.NEVER_AUTOCOMPLETE), EXTENSION_COMPLETION_PRIORITY)
+
+private const val EXTENSION_COMPLETION_PRIORITY = 10_000.0
 
 private data class ExtensionDependency(val file: VirtualFile, val document: Document, val stamp: Long, val fileStamp: Long) {
     fun current() = file.isValid && file.modificationStamp == fileStamp && document.modificationStamp == stamp

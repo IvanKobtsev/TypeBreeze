@@ -109,7 +109,38 @@ module.exports = function extensions(T, root, overlays) {
       T.forEachChild(node, visit);
     }
     visit(source);
-    if (!found) return null;
+    if (!found) {
+      // In incomplete code followed by another statement, TypeScript may attach
+      // the missing property name to that following token. Recover from the
+      // caret instead: find the access operator immediately before the typed
+      // prefix, then locate the widest AST expression ending at the receiver.
+      let prefixStart = at;
+      while (prefixStart > 0 && /[\w$]/.test(source.text[prefixStart - 1])) prefixStart--;
+      let dot = prefixStart;
+      while (dot > 0 && /\s/.test(source.text[dot - 1])) dot--;
+      if (!dot || source.text[dot - 1] !== '.') return null;
+      dot--;
+      let receiverEnd = dot;
+      const optionalAccess = dot > 0 && source.text[dot - 1] === '?';
+      if (optionalAccess) receiverEnd--;
+      while (receiverEnd > 0 && /\s/.test(source.text[receiverEnd - 1])) receiverEnd--;
+      let receiver;
+      function findReceiver(node) {
+        if (node.end < receiverEnd || node.getFullStart() > receiverEnd) return;
+        if (node.end === receiverEnd && node.getStart(source) < receiverEnd &&
+            (!receiver || node.getStart(source) < receiver.getStart(source))) receiver = node;
+        T.forEachChild(node, findReceiver);
+      }
+      findReceiver(source);
+      if (!receiver) return null;
+      for (let node = receiver.parent; node; node = node.parent) {
+        if (T.isTypeNode(node) || T.isImportDeclaration(node) || T.isExportDeclaration(node)) return null;
+      }
+      let end = at;
+      while (end < source.text.length && /[\w$]/.test(source.text[end])) end++;
+      return { start: receiver.getStart(source), end, receiver: receiver.getText(source), node: receiver,
+        prefix: source.text.slice(prefixStart, at), optionalAccess, recovered: true };
+    }
     for (let node = found.parent; node; node = node.parent) {
       if (T.isTypeNode(node) || T.isImportDeclaration(node) || T.isExportDeclaration(node)) return null;
     }
@@ -171,6 +202,30 @@ module.exports = function extensions(T, root, overlays) {
     const parameterHasNull = parameterParts.some(part => part.flags & T.TypeFlags.Null);
     const parameterHasUndefined = parameter.questionToken || parameterParts.some(part => part.flags & T.TypeFlags.Undefined);
     return (!receiverHasNull || parameterHasNull) && (!receiverHasUndefined || parameterHasUndefined);
+  }
+  function declaredReceiverType(checker, node) {
+    const symbolNode = T.isPropertyAccessExpression(node) ? node.name : node;
+    let symbol = checker.getSymbolAtLocation(symbolNode);
+    if (!symbol) return null;
+    if (symbol.flags & T.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol);
+    const declaration = symbol.valueDeclaration ?? symbol.declarations?.[0];
+    return declaration ? checker.getTypeOfSymbolAtLocation(symbol, declaration) : null;
+  }
+  function eligibleExtensionSymbols(program) {
+    const checker = program.getTypeChecker(), result = new Map();
+    for (const extensionFile of extensionFiles) {
+      const source = program.getSourceFile(extensionFile);
+      if (!source || source.isDeclarationFile) continue;
+      for (const declaration of sourceDeclarations(source)) {
+        const symbol = canonical(checker, checker.getSymbolAtLocation(declaration.name));
+        if (!symbol || result.has(symbol)) continue;
+        if (T.isFunctionDeclaration(declaration.fn) && !symbol.declarations?.some(item => T.isFunctionDeclaration(item) && item.body)) continue;
+        const signatures = checker.getTypeOfSymbolAtLocation(symbol, declaration.name).getCallSignatures();
+        if (signatures.length !== 1 || receiverProblem(checker, signatures[0].getDeclaration())) continue;
+        result.set(symbol, declaration);
+      }
+    }
+    return result;
   }
   function requiredArguments(checker, signature, location) {
     const last = signature.parameters.at(-1);
@@ -252,7 +307,11 @@ module.exports = function extensions(T, root, overlays) {
     const ctx = context(source, at);
     if (!ctx) return { candidates: [] };
     const checker = program.getTypeChecker();
-    const receiverType = checker.getTypeAtLocation(ctx.node.expression);
+    let receiverType = checker.getTypeAtLocation(ctx.node.expression ?? ctx.node);
+    // A recovered incomplete optional chain can make TypeScript expose the
+    // non-nullable property-lookup type for its receiver. Recover the declared
+    // union so optional/nullish filtering still sees the original constituents.
+    if (ctx.recovered && ctx.optionalAccess) receiverType = declaredReceiverType(checker, ctx.node) ?? receiverType;
     const snapshot = String(indexGeneration);
     const documents = extensionFiles.map(name => program.getSourceFile(name)).filter(Boolean)
       .map(item => ({ uri: pathToFileURL(item.fileName).href, expectedText: item.text.replace(/\r\n?/g, '\n') }));
@@ -326,6 +385,34 @@ module.exports = function extensions(T, root, overlays) {
         result.push({ uri: pathToFileURL(extensionFile).href, diagnostics });
       }
       return result;
+    },
+    documentExtensions(params) {
+      flushChanges();
+      const file = path.resolve(fileURLToPath(params.textDocument.uri));
+      if (params.text !== undefined) overlays.set(file, { text: params.text, version: params.clientVersion });
+      const program = refresh(file), source = program.getSourceFile(file);
+      if (!source) return null;
+      const checker = program.getTypeChecker(), symbols = eligibleExtensionSymbols(program), occurrences = [], seen = new Set();
+      const add = (node, kind) => {
+        const start = node.getStart(source), end = node.end, key = `${start}:${end}:${kind}`;
+        if (!seen.has(key)) { seen.add(key); occurrences.push({ range: diagnosticRange(source, node), kind }); }
+      };
+      if (/\.ext\.tsx?$/.test(file)) {
+        for (const declaration of sourceDeclarations(source)) {
+          const symbol = canonical(checker, checker.getSymbolAtLocation(declaration.name));
+          if (symbols.has(symbol)) add(declaration.name, 'declaration');
+        }
+      }
+      function visit(node) {
+        if (T.isCallExpression(node)) {
+          const callee = T.isPropertyAccessExpression(node.expression) ? node.expression.name : node.expression;
+          const symbol = canonical(checker, checker.getSymbolAtLocation(callee));
+          if (symbols.has(symbol)) add(callee, 'call');
+        }
+        T.forEachChild(node, visit);
+      }
+      visit(source);
+      return { clientVersion: params.clientVersion ?? null, generation: indexGeneration, occurrences };
     },
     update(file) {
       file = path.resolve(file); if (!scriptNames.includes(file)) scriptNames.push(file);

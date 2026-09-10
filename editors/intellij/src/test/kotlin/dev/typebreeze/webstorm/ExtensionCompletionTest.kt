@@ -58,6 +58,7 @@ class ExtensionCompletionTest : BasePlatformTestCase() {
         val items = myFixture.completeBasic()!!
         assertTrue(items.any { it.lookupString == "truncate" })
         assertTrue(items.any { it.lookupString == "toUpperCase" })
+        assertEquals("truncate", items.first().lookupString)
         myFixture.lookup.currentItem = items.first { it.lookupString == "truncate" }
         myFixture.finishLookup('\n')
         myFixture.checkResult("import { truncate } from './strings.ext';\nconst title = 'hello'; truncate(title)<caret>")

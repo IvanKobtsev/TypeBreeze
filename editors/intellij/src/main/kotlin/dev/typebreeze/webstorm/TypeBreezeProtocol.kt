@@ -9,6 +9,8 @@ import java.util.concurrent.CompletableFuture
 interface TypeBreezeLanguageServer : LanguageServer {
     @JsonRequest("typeBreeze/extensionCompletions")
     fun extensionCompletions(params: ExtensionCompletionParams): CompletableFuture<ExtensionCompletions?>
+    @JsonRequest("typeBreeze/documentExtensions")
+    fun documentExtensions(params: DocumentUnionsParams): CompletableFuture<DocumentExtensionsResponse?>
     @JsonRequest("typeBreeze/documentUnions")
     fun documentUnions(params: DocumentUnionsParams): CompletableFuture<DocumentUnionsResponse?>
     @JsonRequest("typeBreeze/resolveLiteral")
@@ -33,6 +35,8 @@ data class ExtensionOffsetEdit(val start: Int = 0, val end: Int = 0, val expecte
 data class ExtensionCallPlan(val snapshot: String = "", val expectedText: String = "",
     val edits: List<ExtensionOffsetEdit> = emptyList(), val caretOffset: Int = 0, val parameterInfo: Boolean = false)
 data class DocumentUnionsParams(val textDocument: TextDocumentIdentifier, val text:String, val clientVersion:Long, val includeUsages:Boolean=true)
+data class DocumentExtensionsResponse(val clientVersion:Long?=null,val generation:Long=0,val occurrences:List<ExtensionOccurrence> = emptyList())
+data class ExtensionOccurrence(val range:Range=Range(),val kind:String="call")
 data class ResolveLiteralParams(val textDocument:TextDocumentIdentifier,val position:org.eclipse.lsp4j.Position,val text:String,val clientVersion:Long)
 data class RenamePlanParams(val textDocument:TextDocumentIdentifier,val position:org.eclipse.lsp4j.Position,val text:String,val clientVersion:Long,val newValue:String)
 data class DocumentUnionsResponse(val version: Int? = null, val clientVersion:Long?=null, val generation: Long = 0, val literals: List<ResolvedLiteral> = emptyList())
