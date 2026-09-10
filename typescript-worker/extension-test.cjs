@@ -212,6 +212,31 @@ test('generic, any and unknown receivers are excluded', {
   assert(!result.candidates.some(item => item.name === 'anyValue'));
 });
 
+test('unknown union receivers only match exactly unknown values', {
+  'unknown.ext.ts': `type Catchable = Error | unknown;
+    type AliasedCatchable = Catchable;
+    type NestedUnknown = { cause: unknown };
+    export function direct(value: Error | unknown) { return value; }
+    export function aliased(value: AliasedCatchable) { return value; }
+    export function standalone(value: unknown) { return value; }
+    export function anyUnion(value: Error | any) { return value; }
+    export function nested(value: Error | { cause: unknown }) { return value; }
+    export function nestedAlias(value: Error | NestedUnknown) { return value; }
+    export function generic<T>(value: T | unknown) { return value; }`,
+}, f => {
+  for (const source of ['declare const value: any; value.|', 'declare const value: Error; value.|',
+    'declare const value: null; value.|', 'declare const value: undefined; value.|', 'declare const value: never; value.|']) {
+    assert(!f.complete(source).candidates.some(item => ['direct', 'aliased'].includes(item.name)), source);
+  }
+  let result = f.complete('declare const value: unknown; value.|');
+  assert.deepEqual(result.candidates.map(item => item.name).sort(), ['aliased', 'direct']);
+  result = f.complete('declare const value: unknown; value?.|');
+  assert.deepEqual(result.candidates.map(item => item.name).sort(), ['aliased', 'direct']);
+  const diagnostics = f.service.diagnostics().find(item => item.uri.endsWith('unknown.ext.ts')).diagnostics;
+  assert.equal(diagnostics.length, 5);
+  assert(diagnostics.every(item => [5, 6, 7, 8, 9].includes(item.range.start.line)));
+});
+
 test('same-named candidates and shebang/directive imports', {
   'one.ext.ts': 'export function upper(value: string) { return value; }',
   'two.ext.ts': 'export function upper(value: string) { return value; }',

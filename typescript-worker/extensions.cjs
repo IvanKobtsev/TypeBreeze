@@ -153,33 +153,101 @@ module.exports = function extensions(T, root, overlays) {
     return { start: found.getStart(source), end: found.end, receiver: found.expression.getText(source), node: found,
       prefix, optionalAccess };
   }
-  function receiverProblem(checker, fn) {
-    if (!fn?.parameters) return 'A callable implementation is required.';
+  function receiverInfo(checker, fn) {
+    const fail = problem => ({ problem, kind: 'ordinary' });
+    if (!fn?.parameters) return fail('A callable implementation is required.');
     const thisParameter = fn.parameters.find(parameter => parameter.name.getText() === 'this');
-    if (thisParameter && checker.typeToString(checker.getTypeAtLocation(thisParameter)) !== 'void') return 'Functions requiring a bound this are not supported.';
+    if (thisParameter && checker.typeToString(checker.getTypeAtLocation(thisParameter)) !== 'void') return fail('Functions requiring a bound this are not supported.');
     const first = fn.parameters.find(parameter => parameter.name.getText() !== 'this');
-    if (!first) return 'An explicitly typed first argument is required.';
-    if (first.dotDotDotToken) return 'A rest parameter cannot be the extension receiver.';
-    if (!first.type) return 'The first argument must have an explicit concrete type.';
+    if (!first) return fail('An explicitly typed first argument is required.');
+    if (first.dotDotDotToken) return fail('A rest parameter cannot be the extension receiver.');
+    if (!first.type) return fail('The first argument must have an explicit concrete type.');
+
+    // `Error | unknown` reduces to `unknown` in the checker. Retain the source
+    // declaration shape (including aliases), otherwise it is indistinguishable
+    // from the unsupported standalone `unknown` receiver.
+    const visitingAliases = new Set();
+    function aliasTarget(node) {
+      if (!T.isTypeReferenceNode(node)) return null;
+      let symbol = checker.getSymbolAtLocation(node.typeName);
+      if (symbol?.flags & T.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol);
+      return symbol?.declarations?.find(T.isTypeAliasDeclaration)?.type ?? null;
+    }
+    const visitingStandaloneAliases = new Set();
+    function resolvesStandaloneUnknown(node) {
+      if (T.isParenthesizedTypeNode(node)) return resolvesStandaloneUnknown(node.type);
+      if (node.kind === T.SyntaxKind.UnknownKeyword) return true;
+      const target = aliasTarget(node);
+      if (!target || visitingStandaloneAliases.has(target.parent)) return false;
+      visitingStandaloneAliases.add(target.parent);
+      const result = resolvesStandaloneUnknown(target);
+      visitingStandaloneAliases.delete(target.parent);
+      return result;
+    }
+    function syntaxFacts(node) {
+      if (!node) return { unknown: false, nestedUnknown: false, unknownUnion: false, any: false, typeParameter: false };
+      if (T.isParenthesizedTypeNode(node)) return syntaxFacts(node.type);
+      if (node.kind === T.SyntaxKind.UnknownKeyword) return { unknown: true, nestedUnknown: false, unknownUnion: false, any: false, typeParameter: false };
+      if (node.kind === T.SyntaxKind.AnyKeyword) return { unknown: false, nestedUnknown: false, unknownUnion: false, any: true, typeParameter: false };
+      if (T.isTypeReferenceNode(node)) {
+        const symbol = checker.getSymbolAtLocation(node.typeName);
+        const typeParameter = !!(symbol?.flags & T.SymbolFlags.TypeParameter) ||
+          !!(checker.getTypeAtLocation(node).flags & T.TypeFlags.TypeParameter);
+        const argumentsFacts = (node.typeArguments ?? []).map(syntaxFacts);
+        const target = aliasTarget(node);
+        let targetFacts = { unknown: false, nestedUnknown: false, unknownUnion: false, any: false, typeParameter: false };
+        if (target) {
+          const declaration = target.parent;
+          if (!visitingAliases.has(declaration)) {
+            visitingAliases.add(declaration);
+            targetFacts = syntaxFacts(target);
+            visitingAliases.delete(declaration);
+          }
+        }
+        const all = [targetFacts, ...argumentsFacts];
+        return { unknown: all.some(item => item.unknown), nestedUnknown: all.some(item => item.nestedUnknown),
+          unknownUnion: targetFacts.unknownUnion, any: all.some(item => item.any),
+          typeParameter: typeParameter || argumentsFacts.some(item => item.typeParameter) };
+      }
+      if (T.isUnionTypeNode(node)) {
+        const parts = node.types.map(syntaxFacts);
+        const directUnknown = node.types.some(resolvesStandaloneUnknown);
+        const unknownUnion = node.types.length > 1 && (directUnknown || parts.some(part => part.unknownUnion));
+        return { unknown: parts.some(item => item.unknown),
+          nestedUnknown: parts.some(item => item.nestedUnknown) || parts.some((item, index) => item.unknown &&
+            !item.unknownUnion && !resolvesStandaloneUnknown(node.types[index])),
+          unknownUnion, any: parts.some(item => item.any), typeParameter: parts.some(item => item.typeParameter) };
+      }
+      const children = [];
+      T.forEachChild(node, child => { children.push(syntaxFacts(child)); });
+      return { unknown: children.some(item => item.unknown), nestedUnknown: children.some(item => item.unknown),
+        unknownUnion: false, any: children.some(item => item.any), typeParameter: children.some(item => item.typeParameter) };
+    }
+    const facts = syntaxFacts(first.type);
     const seen = new Set();
     function nonConcrete(type) {
       if (!type || seen.has(type)) return false;
       seen.add(type);
-      if (type.flags & (T.TypeFlags.TypeParameter | T.TypeFlags.Any | T.TypeFlags.Unknown)) return true;
+      if (type.flags & (T.TypeFlags.TypeParameter | T.TypeFlags.Any)) return true;
+      if (type.flags & T.TypeFlags.Unknown) return !facts.unknownUnion;
       if (type.isUnionOrIntersection?.() && type.types.some(nonConcrete)) return true;
       if (type.aliasTypeArguments?.some(nonConcrete) || type.typeArguments?.some(nonConcrete)) return true;
       const constraint = checker.getBaseConstraintOfType(type);
       return constraint && constraint !== type ? nonConcrete(constraint) : false;
     }
-    return nonConcrete(checker.getTypeAtLocation(first.type)) ? 'The first argument type must not contain type parameters, any, or unknown.' : null;
+    if (facts.any || facts.typeParameter || facts.nestedUnknown || !facts.unknownUnion && facts.unknown || nonConcrete(checker.getTypeAtLocation(first.type))) {
+      return fail('The first argument type must not contain type parameters, any, or standalone or nested unknown.');
+    }
+    return { problem: null, kind: facts.unknownUnion ? 'unknownUnion' : 'ordinary' };
   }
+  function receiverProblem(checker, fn) { return receiverInfo(checker, fn).problem; }
   function singletonReceiverKind(type) {
     if (type.flags & T.TypeFlags.Never) return T.TypeFlags.Never;
     if (type.flags & T.TypeFlags.Null) return T.TypeFlags.Null;
     if (type.flags & T.TypeFlags.Undefined) return T.TypeFlags.Undefined;
     return 0;
   }
-  function receiverCompatible(checker, receiverType, parameterType) {
+  function receiverCompatible(checker, receiverType, parameterType, receiverKind = 'ordinary') {
     // never is assignable to everything, while null/undefined are assignable to
     // every union containing them. Those rules are useful for type checking but
     // disastrous for extension discovery: a narrowed nullish/impossible value
@@ -187,6 +255,7 @@ module.exports = function extensions(T, root, overlays) {
     // match only an extension declared for that exact singleton type.
     const singleton = singletonReceiverKind(receiverType);
     if (singleton) return singletonReceiverKind(parameterType) === singleton;
+    if (receiverKind === 'unknownUnion') return !!(receiverType.flags & T.TypeFlags.Unknown);
     return checker.isTypeAssignableTo(receiverType, parameterType);
   }
   function supportsOptionalAccess(checker, receiverType, signature, declaration, location) {
@@ -329,10 +398,12 @@ module.exports = function extensions(T, root, overlays) {
         const signatures = checker.getTypeOfSymbolAtLocation(symbol, declaration.name).getCallSignatures();
         if (signatures.length !== 1) continue;
         const preview = signatures[0], signatureDeclaration = preview.getDeclaration();
-        if (!signatureDeclaration || receiverProblem(checker, signatureDeclaration)) continue;
+        if (!signatureDeclaration) continue;
+        const receiver = receiverInfo(checker, signatureDeclaration);
+        if (receiver.problem) continue;
         if (ctx.optionalAccess && !supportsOptionalAccess(checker, receiverType, preview, signatureDeclaration, ctx.node)) continue;
         const receiverSymbol = preview.parameters.find(parameter => parameter.name !== 'this');
-        if (!receiverSymbol || !receiverCompatible(checker, receiverType, checker.getTypeOfSymbolAtLocation(receiverSymbol, ctx.node))) continue;
+        if (!receiverSymbol || !receiverCompatible(checker, receiverType, checker.getTypeOfSymbolAtLocation(receiverSymbol, ctx.node), receiver.kind)) continue;
         const exported = exports.find(item => canonical(checker, item) === symbol);
         const reserved = new Set(checker.getSymbolsInScope(ctx.node, T.SymbolFlags.Value | T.SymbolFlags.Type | T.SymbolFlags.Alias).map(item => item.name));
         const access = binding(checker, source, ctx.node, symbol, target, exported?.name, reserved, declaration.name.text);
