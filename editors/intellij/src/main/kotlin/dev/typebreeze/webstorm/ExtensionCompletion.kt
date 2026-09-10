@@ -6,6 +6,7 @@ import com.intellij.codeInsight.completion.CompletionParameters
 import com.intellij.codeInsight.completion.CompletionResultSet
 import com.intellij.codeInsight.completion.CompletionType
 import com.intellij.codeInsight.completion.InsertionContext
+import com.intellij.codeInsight.completion.PrioritizedLookupElement
 import com.intellij.codeInsight.editorActions.TypedHandlerDelegate
 import com.intellij.codeInsight.lookup.AutoCompletionPolicy
 import com.intellij.codeInsight.lookup.LookupElementBuilder
@@ -13,7 +14,6 @@ import com.intellij.codeInsight.lookup.LookupElement
 import com.intellij.codeInsight.lookup.LookupEvent
 import com.intellij.codeInsight.lookup.LookupListener
 import com.intellij.codeInsight.lookup.LookupManager
-import com.intellij.codeInsight.lookup.PrioritizedLookupElement
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.Document
