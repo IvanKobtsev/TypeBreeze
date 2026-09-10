@@ -7,7 +7,7 @@ generation, and asset-import generation.
 | Feature | Status |
 | --- | --- |
 | Union intelligence | Feature-complete, but not yet stable |
-| TypeScript extension methods | In development |
+| TypeScript extension methods | Feature-complete, but not yet stable |
 | Mapping auto-generation | Planning |
 | Asset-import auto-generation | Planning |
 
@@ -68,8 +68,9 @@ than TypeBreeze-specific traversal rules.
 
 ## TypeScript extension methods
 
-**Status: in development.** The current behavior is usable for development and
-testing, but its supported cases and editor experience are still being refined.
+**Status: feature-complete, but not yet stable.** The planned behavior is
+implemented, but still needs validation in a real project, like union
+intelligence, before it can be considered stable.
 
 Put ordinary functions in project files ending in **`.ext.ts`** or **`.ext.tsx`**
 and explicitly annotate their first argument:
@@ -103,11 +104,15 @@ entry under **Editor | Color Scheme | TypeBreeze**. Styling can be toggled under
 Discovery follows the active file's TypeScript project configuration and includes
 unsaved source. Dependency packages, declaration files, excluded files, anonymous
 default exports, overloaded functions, unannotated or rest receivers, receivers
-containing type parameters, `any`, or `unknown`, and functions requiring a bound
-`this` are not extension candidates. TypeBreeze reports these exclusions as
-warnings in extension files. Optional access offers only functions whose receiver
-covers the actual `null`, `undefined`, or combined nullish type of the expression. Generated code
-remains plain TypeScript and needs no TypeBreeze runtime.
+containing type parameters or `any`, standalone or nested `unknown` receivers,
+and functions requiring a bound `this` are not extension candidates. A top-level
+union such as `Error | unknown`, including one reached through type aliases, is
+supported as an explicit unknown-receiver extension and is suggested only when
+the current narrowed receiver type is exactly `unknown`. TypeBreeze reports
+unsupported declarations as warnings in extension files. Optional access offers
+only functions whose receiver covers the actual `null`, `undefined`, or combined
+nullish type of the expression. Generated code remains plain TypeScript and needs
+no TypeBreeze runtime.
 
 ## Mapping auto-generation
 
