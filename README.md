@@ -101,9 +101,9 @@ unsaved source. Dependency packages, declaration files, excluded files, anonymou
 default exports, overloaded functions, unannotated or rest receivers, receivers
 containing type parameters, `any`, or `unknown`, and functions requiring a bound
 `this` are not extension candidates. TypeBreeze reports these exclusions as
-warnings in extension files. This version handles ordinary dot access;
-optional chains do not offer extension suggestions. Generated code remains plain
-TypeScript and needs no TypeBreeze runtime.
+warnings in extension files. Optional access offers only functions whose receiver
+covers the actual `null`, `undefined`, or combined nullish type of the expression. Generated code
+remains plain TypeScript and needs no TypeBreeze runtime.
 
 ## Mapping auto-generation
 

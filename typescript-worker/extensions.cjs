@@ -109,17 +109,18 @@ module.exports = function extensions(T, root, overlays) {
       T.forEachChild(node, visit);
     }
     visit(source);
-    if (!found || found.questionDotToken || found.flags & T.NodeFlags.OptionalChain) return null;
+    if (!found) return null;
     for (let node = found.parent; node; node = node.parent) {
       if (T.isTypeNode(node) || T.isImportDeclaration(node) || T.isExportDeclaration(node)) return null;
     }
     const gap = source.text.slice(found.expression.end, found.name.getStart(source));
-    if (!/^\s*\.\s*$/.test(gap)) return null;
+    const optionalAccess = /^\s*\?\.\s*$/.test(gap);
+    if (!optionalAccess && !/^\s*\.\s*$/.test(gap)) return null;
     // The parser can attach trailing trivia to a missing name. Never complete there.
     const prefix = source.text.slice(found.name.getStart(source), at);
     if (prefix && !T.isIdentifierText(prefix, T.ScriptTarget.Latest)) return null;
     return { start: found.getStart(source), end: found.end, receiver: found.expression.getText(source), node: found,
-      prefix };
+      prefix, optionalAccess };
   }
   function receiverProblem(checker, fn) {
     if (!fn?.parameters) return 'A callable implementation is required.';
@@ -140,6 +141,36 @@ module.exports = function extensions(T, root, overlays) {
       return constraint && constraint !== type ? nonConcrete(constraint) : false;
     }
     return nonConcrete(checker.getTypeAtLocation(first.type)) ? 'The first argument type must not contain type parameters, any, or unknown.' : null;
+  }
+  function singletonReceiverKind(type) {
+    if (type.flags & T.TypeFlags.Never) return T.TypeFlags.Never;
+    if (type.flags & T.TypeFlags.Null) return T.TypeFlags.Null;
+    if (type.flags & T.TypeFlags.Undefined) return T.TypeFlags.Undefined;
+    return 0;
+  }
+  function receiverCompatible(checker, receiverType, parameterType) {
+    // never is assignable to everything, while null/undefined are assignable to
+    // every union containing them. Those rules are useful for type checking but
+    // disastrous for extension discovery: a narrowed nullish/impossible value
+    // would otherwise expose unrelated methods. Singleton receivers therefore
+    // match only an extension declared for that exact singleton type.
+    const singleton = singletonReceiverKind(receiverType);
+    if (singleton) return singletonReceiverKind(parameterType) === singleton;
+    return checker.isTypeAssignableTo(receiverType, parameterType);
+  }
+  function supportsOptionalAccess(checker, receiverType, signature, declaration, location) {
+    const parameter = declaration.parameters.find(item => item.name.getText() !== 'this');
+    if (!parameter) return false;
+    const symbol = signature.parameters.find(item => item.name !== 'this');
+    if (!symbol) return false;
+    const parameterType = checker.getTypeOfSymbolAtLocation(symbol, location);
+    const receiverParts = receiverType.isUnion?.() ? receiverType.types : [receiverType];
+    const parameterParts = parameterType.isUnion?.() ? parameterType.types : [parameterType];
+    const receiverHasNull = receiverParts.some(part => part.flags & T.TypeFlags.Null);
+    const receiverHasUndefined = receiverParts.some(part => part.flags & T.TypeFlags.Undefined);
+    const parameterHasNull = parameterParts.some(part => part.flags & T.TypeFlags.Null);
+    const parameterHasUndefined = parameter.questionToken || parameterParts.some(part => part.flags & T.TypeFlags.Undefined);
+    return (!receiverHasNull || parameterHasNull) && (!receiverHasUndefined || parameterHasUndefined);
   }
   function requiredArguments(checker, signature, location) {
     const last = signature.parameters.at(-1);
@@ -240,8 +271,9 @@ module.exports = function extensions(T, root, overlays) {
         if (signatures.length !== 1) continue;
         const preview = signatures[0], signatureDeclaration = preview.getDeclaration();
         if (!signatureDeclaration || receiverProblem(checker, signatureDeclaration)) continue;
+        if (ctx.optionalAccess && !supportsOptionalAccess(checker, receiverType, preview, signatureDeclaration, ctx.node)) continue;
         const receiverSymbol = preview.parameters.find(parameter => parameter.name !== 'this');
-        if (!receiverSymbol || !checker.isTypeAssignableTo(receiverType, checker.getTypeOfSymbolAtLocation(receiverSymbol, ctx.node))) continue;
+        if (!receiverSymbol || !receiverCompatible(checker, receiverType, checker.getTypeOfSymbolAtLocation(receiverSymbol, ctx.node))) continue;
         const exported = exports.find(item => canonical(checker, item) === symbol);
         const reserved = new Set(checker.getSymbolsInScope(ctx.node, T.SymbolFlags.Value | T.SymbolFlags.Type | T.SymbolFlags.Alias).map(item => item.name));
         const access = binding(checker, source, ctx.node, symbol, target, exported?.name, reserved, declaration.name.text);

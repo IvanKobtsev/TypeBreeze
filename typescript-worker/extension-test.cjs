@@ -125,7 +125,7 @@ test('expression boundaries, optional arguments and excluded contexts', {
     const result = f.complete(`const user = {name: "x"}; const names = ["x"]; function getName(){return "x";} const result = ${expression}.up|;`);
     assert(output(result.candidates.find(item => item.name === 'upper')).includes(`upper(${expression})|;`));
   }
-  for (const source of ['const x = "a"; x?.|', 'const x = "a"; // x.|', 'const x = "x.|";', 'type X = string.|', 'import { x.| } from "foo"']) {
+  for (const source of ['const x = "a"; // x.|', 'const x = "x.|";', 'type X = string.|', 'import { x.| } from "foo"']) {
     assert.equal(f.complete(source).candidates.length, 0, source);
   }
 });
@@ -275,6 +275,45 @@ test('imported concrete types and optional receivers remain eligible', {
   const nullable = f.complete(`import { UserDto } from './models';
     declare const field: UserDto | null; field.|`);
   assert(nullable.candidates.some(item => item.name === 'getInitials'));
+});
+
+test('singleton nullish and never receivers only match exact extensions', {
+  'special.ext.ts': `export function nullable(value: string | null) { return value; }
+    export function optional(value: string | undefined) { return value; }
+    export function nullOnly(value: null) { return value; }
+    export function undefinedOnly(value: undefined) { return value; }
+    export function assertNever(value: never): never { throw new Error(String(value)); }
+    export function ordinary(value: { name: string }) { return value.name; }`,
+}, f => {
+  let result = f.complete('declare let value: string | null; if (value === null) { value.| }');
+  assert.deepEqual(result.candidates.map(item => item.name), ['nullOnly']);
+  result = f.complete('declare let value: string | undefined; if (value === undefined) { value.| }');
+  assert.deepEqual(result.candidates.map(item => item.name), ['undefinedOnly']);
+  result = f.complete('declare const value: never; value.|');
+  assert.deepEqual(result.candidates.map(item => item.name), ['assertNever']);
+  result = f.complete('declare const value: string | null; value.|');
+  assert(result.candidates.some(item => item.name === 'nullable'));
+  assert(!result.candidates.some(item => item.name === 'nullOnly'));
+});
+
+test('optional access only offers null-safe extension receivers', {
+  'optional.ext.ts': `export function ordinary(value: string) { return value; }
+    export function nullUnion(value: string | null) { return value; }
+    export function undefinedUnion(value: string | undefined) { return value; }
+    export function nullable(value: string | null | undefined) { return value; }
+    export function optional(value?: string) { return value; }`,
+}, f => {
+  let result = f.complete('declare const value: string | undefined; value?.|');
+  assert.deepEqual(result.candidates.map(item => item.name).sort(), ['nullable', 'optional', 'undefinedUnion']);
+  assert.match(output(result.candidates.find(item => item.name === 'optional')), /optional\(value\)\|/);
+  assert(!output(result.candidates.find(item => item.name === 'optional')).includes('?.'));
+  result = f.complete('declare const value: string | null | undefined; value?.|');
+  assert.deepEqual(result.candidates.map(item => item.name), ['nullable']);
+  result = f.complete('declare const value: string | null; value?.|');
+  assert.deepEqual(result.candidates.map(item => item.name).sort(), ['nullUnion', 'nullable']);
+  result = f.complete('const value = "x"; value.|');
+  assert(result.candidates.some(item => item.name === 'ordinary'));
+  assert(result.candidates.some(item => item.name === 'undefinedUnion'));
 });
 
 console.log(`${assertions} extension scenarios passed`);

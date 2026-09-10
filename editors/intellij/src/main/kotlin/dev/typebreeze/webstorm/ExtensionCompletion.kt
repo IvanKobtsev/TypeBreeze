@@ -119,7 +119,7 @@ internal fun extensionDotContext(text: String, offset: Int): Boolean {
     var start = offset
     while (start > 0 && (text[start - 1].isLetterOrDigit() || text[start - 1] in "_$")) start--
     while (start > 0 && text[start - 1].isWhitespace()) start--
-    return start > 0 && text[start - 1] == '.' && (start < 2 || text[start - 2] != '?')
+    return start > 0 && text[start - 1] == '.'
 }
 
 class ExtensionAutoPopup : TypedHandlerDelegate() {

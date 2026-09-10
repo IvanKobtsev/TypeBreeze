@@ -108,7 +108,7 @@ class ExtensionCompletionTest : BasePlatformTestCase() {
     fun testDotTriggerExcludesOptionalAccess() {
         assertTrue(extensionDotContext("title.", 6))
         assertTrue(extensionDotContext("title.tr", 8))
-        assertFalse(extensionDotContext("title?.", 7))
+        assertTrue(extensionDotContext("title?.", 7))
         assertFalse(extensionDotContext("title", 5))
     }
 
