@@ -11,7 +11,6 @@ import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.fileEditor.FileDocumentManager
-import com.intellij.openapi.fileEditor.FileDocumentManagerListener
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
@@ -99,21 +98,24 @@ class MappingGenerationService(private val project:Project):Disposable {
     private val generation=AtomicLong()
     @Volatile private var anchor:VirtualFile?=null
     init {
-        project.messageBus.connect(this).subscribe(FileDocumentManagerListener.TOPIC,object:FileDocumentManagerListener{override fun beforeDocumentSaving(document:com.intellij.openapi.editor.Document){FileDocumentManager.getInstance().getFile(document)?.takeIf{it.name=="mappings.brz.json"||TypeBreezeLspProvider.supports(it)}?.let(::schedule)}})
         project.messageBus.connect(this).subscribe(VirtualFileManager.VFS_CHANGES,object:BulkFileListener{override fun after(events:List<VFileEvent>){events.asSequence().mapNotNull{it.file}.firstOrNull{it.name=="mappings.brz.json"||TypeBreezeLspProvider.supports(it)}?.let(::schedule)}})
     }
-    fun schedule(file:VirtualFile){if(TypeBreezeLspProvider.supports(file))anchor=file;val token=generation.incrementAndGet();AppExecutorUtil.getAppScheduledExecutorService().schedule({if(generation.get()==token)regenerate(file)},250,TimeUnit.MILLISECONDS)}
-    fun regenerate(file:VirtualFile,attempt:Int=0){
+    fun schedule(file:VirtualFile){if(TypeBreezeLspProvider.supports(file))anchor=file;val token=generation.incrementAndGet();AppExecutorUtil.getAppScheduledExecutorService().schedule({if(generation.get()==token)regenerate(file,0,token)},250,TimeUnit.MILLISECONDS)}
+    fun regenerate(file:VirtualFile){val token=generation.incrementAndGet();regenerate(file,0,token)}
+    private fun regenerate(file:VirtualFile,attempt:Int,token:Long){
         if(project.isDisposed||project.basePath==null)return
+        if(generation.get()!=token)return
         val requestFile=file.takeIf(TypeBreezeLspProvider::supports)?:anchor?.takeIf{it.isValid}?:com.intellij.openapi.fileEditor.FileEditorManager.getInstance(project).openFiles.firstOrNull(TypeBreezeLspProvider::supports)?:return
         anchor=requestFile
         val clients=LspClientManager.getInstance(project).getClients(TypeBreezeLspProvider::class.java).filter{it.descriptor.isSupportedFile(requestFile)}
-        if(clients.isEmpty()){if(attempt<20)AppExecutorUtil.getAppScheduledExecutorService().schedule({regenerate(requestFile,attempt+1)},500,TimeUnit.MILLISECONDS);return}
+        if(clients.isEmpty()){if(attempt<20)AppExecutorUtil.getAppScheduledExecutorService().schedule({regenerate(requestFile,attempt+1,token)},500,TimeUnit.MILLISECONDS);return}
         AppExecutorUtil.getAppExecutorService().execute {
             val plan=clients.firstNotNullOfOrNull{client->runCatching{client.sendRequestSync(30_000){server->(server as TypeBreezeLanguageServer).mappingGeneration()}}.onFailure{LOG.warn("Mapping generation failed",it)}.getOrNull()}?:return@execute
             ApplicationManager.getApplication().invokeLater {
+                if(generation.get()!=token)return@invokeLater
                 val root=Path.of(project.basePath!!).normalize()
                 ApplicationManager.getApplication().runWriteAction { for(generated in plan.files){val target=root.resolve(generated.path).normalize();if(!target.startsWith(root))continue;val parent=VfsUtil.createDirectoryIfMissing(target.parent.toString())?:continue;val out=parent.findChild(target.fileName.toString())?:parent.createChildData(this,target.fileName.toString());if(VfsUtil.loadText(out)!=generated.content)VfsUtil.saveText(out,generated.content)} }
+                LOG.info("Auto-mapping generated ${plan.files.size} file(s), ${plan.occurrences.size} gutter occurrence(s), and ${plan.diagnosticDocuments.sumOf{it.diagnostics.size}} diagnostic(s)")
                 project.getService(MappingOccurrenceCache::class.java).replace(plan.occurrences)
                 if(plan.diagnostics.isNotEmpty())notify(project,plan.diagnostics.joinToString("\n"){"${it.path}: ${it.message}"})
             }
@@ -128,5 +130,6 @@ class MappingOccurrenceCache(private val project:Project) {
     private val entries=java.util.concurrent.ConcurrentHashMap<String,List<MappingOccurrence>>()
     fun replace(occurrences:List<MappingOccurrence>){val affected=entries.keys.toSet()+occurrences.map{it.uri};entries.clear();occurrences.groupBy{it.uri}.forEach{(uri,items)->entries[uri]=items};for(uri in affected)VirtualFileManager.getInstance().findFileByUrl(uri)?.let{com.intellij.psi.PsiManager.getInstance(project).findFile(it)}?.let{com.intellij.codeInsight.daemon.DaemonCodeAnalyzer.getInstance(project).restart(it)}}
     fun matching(file:VirtualFile,range:com.intellij.openapi.util.TextRange):MappingOccurrence?=entries[file.url]?.firstOrNull{occurrence->val document=FileDocumentManager.getInstance().getDocument(file)?:return@firstOrNull false;if(occurrence.range.start.line !in 0 until document.lineCount||occurrence.range.end.line !in 0 until document.lineCount)return@firstOrNull false;val start=document.getLineStartOffset(occurrence.range.start.line)+occurrence.range.start.character;val end=document.getLineStartOffset(occurrence.range.end.line)+occurrence.range.end.character;start==range.startOffset&&end==range.endOffset}
-    fun navigate(source:VirtualFile,occurrence:MappingOccurrence){val manager=VirtualFileManager.getInstance();manager.findFileByUrl(occurrence.targetUri)?.let{FileEditorManager.getInstance(project).openFile(it,true);return};project.getService(MappingGenerationService::class.java).regenerate(source);AppExecutorUtil.getAppScheduledExecutorService().schedule({ApplicationManager.getApplication().invokeLater{manager.refreshAndFindFileByUrl(occurrence.targetUri)?.let{FileEditorManager.getInstance(project).openFile(it,true)}}},500,TimeUnit.MILLISECONDS)}
+    fun navigate(source:VirtualFile,occurrence:MappingOccurrence){val manager=VirtualFileManager.getInstance();manager.findFileByUrl(occurrence.targetUri)?.let{FileEditorManager.getInstance(project).openFile(it,true);return};project.getService(MappingGenerationService::class.java).regenerate(source);openWhenReady(occurrence.targetUri,0)}
+    private fun openWhenReady(targetUri:String,attempt:Int){AppExecutorUtil.getAppScheduledExecutorService().schedule({ApplicationManager.getApplication().invokeLater{val file=VirtualFileManager.getInstance().refreshAndFindFileByUrl(targetUri);if(file!=null)FileEditorManager.getInstance(project).openFile(file,true)else if(attempt<30)openWhenReady(targetUri,attempt+1)}},250,TimeUnit.MILLISECONDS)}
 }

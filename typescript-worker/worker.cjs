@@ -22,19 +22,19 @@ function position(source, offset) {
 function range(source, start, end) { return { start: position(source, start), end: position(source, end) }; }
 function offset(source, point) { return source.getPositionOfLineAndCharacter(point.line, point.character); }
 function uri(file) { return pathToFileURL(path.resolve(file)).href; }
-function createLanguageService() {
+function createLanguageService(diskOnly = false) {
   const T = loadTypeScript();
   const config = T.findConfigFile(root, T.sys.fileExists, 'tsconfig.json');
   let names, options;
   if (config) {
     const parsed = T.parseJsonConfigFileContent(T.readConfigFile(config, T.sys.readFile).config, T.sys, path.dirname(config));
     names = parsed.fileNames; options = parsed.options;
-  } else { names = [...overlays.keys()]; options = { allowJs: false, jsx: T.JsxEmit.Preserve, moduleResolution: T.ModuleResolutionKind.Bundler }; }
+  } else { names = diskOnly ? [] : [...overlays.keys()]; options = { allowJs: false, jsx: T.JsxEmit.Preserve, moduleResolution: T.ModuleResolutionKind.Bundler }; }
   const host = {
     getCompilationSettings: () => options,
-    getScriptFileNames: () => [...new Set([...names, ...overlays.keys()])],
-    getScriptVersion: name => String(overlays.get(path.resolve(name))?.version ?? statVersion(name)),
-    getScriptSnapshot: name => { const text=overlays.get(path.resolve(name))?.text ?? T.sys.readFile(name);return text===undefined?undefined:T.ScriptSnapshot.fromString(text); },
+    getScriptFileNames: () => [...new Set([...names, ...(diskOnly ? [] : overlays.keys())])],
+    getScriptVersion: name => String((diskOnly ? undefined : overlays.get(path.resolve(name))?.version) ?? statVersion(name)),
+    getScriptSnapshot: name => { const text=(diskOnly ? undefined : overlays.get(path.resolve(name))?.text) ?? T.sys.readFile(name);return text===undefined?undefined:T.ScriptSnapshot.fromString(text); },
     getCurrentDirectory: () => root,
     getDefaultLibFileName: value => T.getDefaultLibFilePath(value),
     fileExists: T.sys.fileExists,
@@ -227,7 +227,7 @@ function mappingGeneration() {
   const output=config.outputDirectory; const keyName=config.keyTypeParameter||'TKey'; const mappings=config.mappings;
   if(typeof output!=='string'||!output||!mappings||typeof mappings!=='object'||Array.isArray(mappings))return{files:[],diagnostics:[{path:'mappings.brz.json',message:'Configuration requires outputDirectory and a mappings object.'}]};
   const outputRoot=path.resolve(root,output); const relOutput=path.relative(root,outputRoot); if(relOutput.startsWith('..')||path.isAbsolute(relOutput))return{files:[],diagnostics:[{path:'mappings.brz.json',message:'outputDirectory must remain inside the workspace.'}]};
-  languageService=undefined; const program=createProgram(); const checker=program.getTypeChecker(); const parsedOptions=program.getCompilerOptions();
+  const mappingService=createLanguageService(true);const program=mappingService.getProgram();if(!program)return{files:[],diagnostics:[{path:'mappings.brz.json',message:'The TypeScript project could not be loaded.'}],occurrences:[],diagnosticDocuments:[]};const checker=program.getTypeChecker(); const parsedOptions=program.getCompilerOptions();
   const sourceFiles=program.getSourceFiles().filter(file=>!file.isDeclarationFile&&path.resolve(file.fileName).startsWith(root));
   const canonical=s=>canonicalSymbol(T,checker,s);
   const stripExtension=value=>value.replace(/(\.d)?\.[cm]?[jt]sx?$/i,'').replace(/\/index$/,'');
