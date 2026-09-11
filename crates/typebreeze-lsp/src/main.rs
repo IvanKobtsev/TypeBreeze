@@ -198,10 +198,13 @@ fn handle_request(connection: &Connection, workers: &RuntimeWorkers, req: Reques
         "typeBreeze/renamePlan" => worker.request("renamePlan", req.params).ok().flatten(),
         "typeBreeze/mappingTypeAt" => worker.request("mappingTypeAt", req.params).ok().flatten(),
         "typeBreeze/mappingGeneration" => {
-            let result = worker
-                .request("mappingGeneration", req.params)
-                .ok()
-                .flatten();
+            let result = match worker.request("mappingGeneration", req.params) {
+                Ok(result) => result,
+                Err(error) => {
+                    log(&format!("mapping generation failed: {error:#}"));
+                    None
+                }
+            };
             if let Some(value) = result.as_ref()
                 && let Ok(plan) = serde_json::from_value::<typebreeze_protocol::MappingGenerationPlan>(
                     value.clone(),

@@ -12,6 +12,7 @@ export type Template<TKey extends Kind,TProps extends {}>={payload:TProps};
 export type Wide<TKey extends string>={key:TKey};`);
 fs.writeFileSync(path.join(root, 'src/templates.ts'), `import {Kind,Template} from '@/types';
 export function System(value:Template<Kind.System,{}>){return value}
+export let assignedLater: ((value: Template<Kind.System,{}>) => unknown);
 export default function Mention(value:Template<Kind.Mention,{}>){return value}
 export function Invalid(value:Template<Kind.Mention,{}>, extra:string){return value}`);
 fs.writeFileSync(path.join(root, 'mappings.brz.json'), JSON.stringify({ outputDirectory: 'src/generated', keyTypeParameter: 'TKey', mappings: { Templates: { path: 'src/types.ts', type: 'Template', requireAllKeys: true } } }));

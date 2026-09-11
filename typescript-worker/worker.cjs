@@ -260,7 +260,7 @@ function mappingGeneration() {
       const moduleSymbol=checker.getSymbolAtLocation(source);const moduleExports=moduleSymbol?checker.getExportsOfModule(moduleSymbol):[];
       for(const statement of source.statements){let name,node,parameters,symbol;
         if(T.isFunctionDeclaration(statement)){name=statement.name?.text;node=statement.name||statement;parameters=statement.parameters;symbol=statement.name&&checker.getSymbolAtLocation(statement.name);}
-        else if(T.isVariableStatement(statement)&&statement.declarationList.declarations.length===1){const decl=statement.declarationList.declarations[0];if(T.isIdentifier(decl.name)&&(T.isArrowFunction(decl.initializer)||T.isFunctionExpression(decl.initializer))){name=decl.name.text;node=decl.name;parameters=decl.initializer.parameters;symbol=checker.getSymbolAtLocation(decl.name);}}
+        else if(T.isVariableStatement(statement)&&statement.declarationList.declarations.length===1){const decl=statement.declarationList.declarations[0];if(T.isIdentifier(decl.name)&&decl.initializer&&(T.isArrowFunction(decl.initializer)||T.isFunctionExpression(decl.initializer))){name=decl.name.text;node=decl.name;parameters=decl.initializer.parameters;symbol=checker.getSymbolAtLocation(decl.name);}}
         else if(T.isExportAssignment(statement)&&(T.isArrowFunction(statement.expression)||T.isFunctionExpression(statement.expression))){node=statement.expression;parameters=statement.expression.parameters;}
         if(!parameters)continue;
         const connectorParameters=parameters.filter(param=>{if(!param.type)return false;const type=checker.getTypeFromTypeNode(param.type);return canonical(type.aliasSymbol||type.getSymbol?.())===info.symbol;});if(!connectorParameters.length)continue;
