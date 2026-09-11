@@ -84,13 +84,13 @@ private fun writeConfig(project:Project,path:Path,config:JsonObject){
 private fun notify(project:Project,message:String)=com.intellij.notification.NotificationGroupManager.getInstance().getNotificationGroup("TypeBreeze").createNotification("Auto-mapping",message,com.intellij.notification.NotificationType.WARNING).notify(project)
 
 private class MappingDialog(project:Project,typeName:String):DialogWrapper(project) {
-    private val name=JBTextField(typeName.removeSuffix("Props").let{"${it}s"})
+    private val mappingNameField=JBTextField(typeName.removeSuffix("Props").let{"${it}s"})
     private val exhaustive=JBCheckBox("Require all keys to be defined",true)
-    val mappingName:String get()=name.text.trim();val requireAllKeys:Boolean get()=exhaustive.isSelected
+    val mappingName:String get()=mappingNameField.text.trim();val requireAllKeys:Boolean get()=exhaustive.isSelected
     init{title="Create auto-mapping for \"$typeName\" type";init()}
-    override fun createCenterPanel():JComponent=JPanel(BorderLayout(0,8)).apply { add(JBLabel("Mapping name:"),BorderLayout.NORTH);add(name,BorderLayout.CENTER);add(exhaustive,BorderLayout.SOUTH) }
-    override fun doValidate():ValidationInfo?=if(!Regex("[A-Za-z_$][\\w$]*").matches(mappingName))ValidationInfo("Enter a valid TypeScript identifier.",name)else null
-    override fun getPreferredFocusedComponent()=name
+    override fun createCenterPanel():JComponent=JPanel(BorderLayout(0,8)).apply { add(JBLabel("Mapping name:"),BorderLayout.NORTH);add(mappingNameField,BorderLayout.CENTER);add(exhaustive,BorderLayout.SOUTH) }
+    override fun doValidate():ValidationInfo?=if(!Regex("[A-Za-z_$][\\w$]*").matches(mappingName))ValidationInfo("Enter a valid TypeScript identifier.",mappingNameField)else null
+    override fun getPreferredFocusedComponent()=mappingNameField
 }
 
 @Service(Service.Level.PROJECT)
@@ -113,6 +113,6 @@ class MappingGenerationService(private val project:Project):Disposable {
             }
         }
     }
-    override fun dispose()={}
+    override fun dispose() {}
     companion object{private val LOG=Logger.getInstance(MappingGenerationService::class.java)}
 }
