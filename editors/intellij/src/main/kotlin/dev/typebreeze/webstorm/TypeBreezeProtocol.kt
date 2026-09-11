@@ -21,6 +21,10 @@ interface TypeBreezeLanguageServer : LanguageServer {
     fun renamePlan(params:RenamePlanParams):CompletableFuture<RenamePlan?>
     @JsonRequest("typeBreeze/enumToUnionPlan")
     fun enumToUnionPlan(params:EnumToUnionParams):CompletableFuture<EnumToUnionPlan?>
+    @JsonRequest("typeBreeze/mappingTypeAt")
+    fun mappingTypeAt(params:MappingTypeParams):CompletableFuture<MappingTypeInfo?>
+    @JsonRequest("typeBreeze/mappingGeneration")
+    fun mappingGeneration(params:Map<String,String> = emptyMap()):CompletableFuture<MappingGenerationPlan?>
 }
 
 data class ExtensionCompletionParams(val textDocument: TextDocumentIdentifier, val position: org.eclipse.lsp4j.Position,
@@ -50,3 +54,8 @@ data class EnumToUnionParams(val textDocument:TextDocumentIdentifier,val positio
 data class EnumDocumentSnapshot(val uri:String="",val expectedText:String="")
 data class EnumTextEdit(val uri:String="",val range:Range=Range(),val expectedText:String="",val newText:String="")
 data class EnumToUnionPlan(val enumName:String?=null,val needsObject:Boolean?=null,val reason:String?=null,val location:SourceLocation?=null,val documents:List<EnumDocumentSnapshot> = emptyList(),val edits:List<EnumTextEdit> = emptyList())
+data class MappingTypeParams(val textDocument:TextDocumentIdentifier,val position:org.eclipse.lsp4j.Position,val text:String,val clientVersion:Long,val keyTypeParameter:String)
+data class MappingTypeInfo(val valid:Boolean=false,val reason:String?=null,val typeName:String="",val path:String="")
+data class GeneratedMappingFile(val path:String="",val content:String="")
+data class MappingDiagnostic(val path:String="",val message:String="")
+data class MappingGenerationPlan(val files:List<GeneratedMappingFile> = emptyList(),val diagnostics:List<MappingDiagnostic> = emptyList())

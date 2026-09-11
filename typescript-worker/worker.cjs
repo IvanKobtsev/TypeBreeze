@@ -190,6 +190,82 @@ function renamePlan(params){
   for(const candidateSource of program.getSourceFiles()){if(candidateSource.isDeclarationFile||(canPrefilter&&!candidateSource.text.includes(oldValue)))continue;const visit=child=>{if(T.isStringLiteralLike(child)&&child.text===oldValue){const usage=resolveNode(program,candidateSource,child);if(usage&&sameLocation(usage.domain,selected.domain))add(candidateSource,usage.range);}T.forEachChild(child,visit);};visit(candidateSource);}
   return{oldValue,contextualTypeName:selected.contextualTypeName,targets};
 }
+
+function mappingTypeAt(params) {
+  syncParams(params);
+  const program=createProgram(); const T=loadTypeScript(); const checker=program.getTypeChecker();
+  const file=path.resolve(fileURLToPath(params.textDocument.uri)); const source=program.getSourceFile(file); if(!source)return null;
+  const at=offset(source,params.position); let declaration;
+  const visit=node=>{if(at>=node.getStart(source)&&at<=node.getEnd()){if((T.isTypeAliasDeclaration(node)||T.isInterfaceDeclaration(node))&&node.name)declaration=node;T.forEachChild(node,visit);}}; visit(source);
+  if(!declaration)return null;
+  const typeParameters=declaration.typeParameters||[]; const expected=params.keyTypeParameter||'TKey';
+  let reason=null;
+  if(!typeParameters.length)reason='The type must have at least one generic parameter.';
+  else if(typeParameters[0].name.text!==expected)reason=`The first generic parameter must be named ${expected}.`;
+  else if(!typeParameters[0].constraint)reason=`${expected} must have a PropertyKey-compatible constraint.`;
+  else {
+    const constraint=checker.getTypeFromTypeNode(typeParameters[0].constraint);
+    const allowed=type=>!!(type.flags&(T.TypeFlags.StringLike|T.TypeFlags.NumberLike|T.TypeFlags.ESSymbolLike|T.TypeFlags.EnumLike|T.TypeFlags.TypeParameter));
+    if(!(constraint.isUnion()?constraint.types:[constraint]).every(allowed))reason=`${expected} must be constrained to string, number, symbol, an enum, or a union of those types.`;
+    const declared=checker.getTypeAtLocation(declaration.name);
+    if(!reason&&!(declared.flags&T.TypeFlags.Object))reason='The selected type must resolve to an object type.';
+  }
+  return {valid:!reason,reason,typeName:declaration.name.text,path:path.relative(root,file).replace(/\\/g,'/')};
+}
+
+function mappingGeneration() {
+  const T=loadTypeScript(); const configPath=path.join(root,'mappings.brz.json'); const diagnostics=[];
+  let config; try{config=JSON.parse(fs.readFileSync(configPath,'utf8'));}catch(error){return{files:[],diagnostics:[{path:'mappings.brz.json',message:`Cannot read mappings.brz.json: ${error.message}`} ]};}
+  const output=config.outputDirectory; const keyName=config.keyTypeParameter||'TKey'; const mappings=config.mappings;
+  if(typeof output!=='string'||!output||!mappings||typeof mappings!=='object'||Array.isArray(mappings))return{files:[],diagnostics:[{path:'mappings.brz.json',message:'Configuration requires outputDirectory and a mappings object.'}]};
+  const outputRoot=path.resolve(root,output); const relOutput=path.relative(root,outputRoot); if(relOutput.startsWith('..')||path.isAbsolute(relOutput))return{files:[],diagnostics:[{path:'mappings.brz.json',message:'outputDirectory must remain inside the workspace.'}]};
+  languageService=undefined; const program=createProgram(); const checker=program.getTypeChecker(); const parsedOptions=program.getCompilerOptions();
+  const sourceFiles=program.getSourceFiles().filter(file=>!file.isDeclarationFile&&path.resolve(file.fileName).startsWith(root));
+  const canonical=s=>canonicalSymbol(T,checker,s);
+  const exported=node=>node.modifiers?.some(m=>m.kind===T.SyntaxKind.ExportKeyword)&&!node.modifiers?.some(m=>m.kind===T.SyntaxKind.DefaultKeyword);
+  const stripExtension=value=>value.replace(/(\.d)?\.[cm]?[jt]sx?$/i,'').replace(/\/index$/,'');
+  function moduleSpecifier(from,to){
+    const clean=path.resolve(to); const base=parsedOptions.baseUrl&&path.resolve(parsedOptions.baseUrl); const candidates=[]; let order=0;
+    const dependency=clean.replace(/\\/g,'/').match(/\/node_modules\/((?:@[^/]+\/)?[^/]+)(\/.*)?$/);if(dependency)return stripExtension(dependency[1]+(dependency[2]||''));
+    for(const [alias,targets] of Object.entries(parsedOptions.paths||{}))for(const target of targets){const absolute=path.resolve(base||root,target);const star=absolute.indexOf('*');let capture=null;if(star<0&&stripExtension(absolute)===stripExtension(clean))capture='';else if(star>=0){const pre=absolute.slice(0,star),post=absolute.slice(star+1);if(clean.startsWith(pre)&&clean.endsWith(post))capture=clean.slice(pre.length,clean.length-post.length);}if(capture!==null){const value=alias.includes('*')?alias.replace('*',stripExtension(capture).replace(/\\/g,'/')):alias;candidates.push({value,specificity:target.replace('*','').length,order:order++});}}
+    if(candidates.length)return candidates.sort((a,b)=>b.specificity-a.specificity||a.value.length-b.value.length||a.order-b.order)[0].value;
+    if(base){const relative=path.relative(base,clean);if(!relative.startsWith('..')&&!path.isAbsolute(relative))return stripExtension(relative.replace(/\\/g,'/'));}
+    let relative=stripExtension(path.relative(path.dirname(from),clean).replace(/\\/g,'/'));return relative.startsWith('.')?relative:`./${relative}`;
+  }
+  function findType(entry){const wanted=path.resolve(root,entry.path||'');const source=program.getSourceFile(wanted);if(!source)return{};let declaration;for(const statement of source.statements)if((T.isTypeAliasDeclaration(statement)||T.isInterfaceDeclaration(statement))&&statement.name.text===entry.type)declaration=statement;return{source,declaration,symbol:declaration&&canonical(checker.getSymbolAtLocation(declaration.name))};}
+  function finiteDomain(parameter){if(!parameter?.constraint)return null;const type=checker.getTypeFromTypeNode(parameter.constraint);const parts=type.isUnion()?type.types:[type];const result=[];for(const part of parts){if(part.flags&T.TypeFlags.EnumLiteral){const symbol=part.getSymbol?.();if(!symbol)return null;result.push(symbol.parent?`${checker.symbolToString(symbol.parent)}.${symbol.name}`:symbol.name);}else if(part.flags&T.TypeFlags.StringLiteral)result.push(JSON.stringify(part.value));else if(part.flags&T.TypeFlags.NumberLiteral)result.push(String(part.value));else return null;}return result;}
+  function keyExpression(type,node){
+    if(type.flags&T.TypeFlags.EnumLiteral){const symbol=type.getSymbol?.();if(symbol){const parent=symbol.parent;return parent?`${checker.symbolToString(parent)}.${symbol.name}`:symbol.name;}}
+    if(type.flags&T.TypeFlags.StringLiteral)return JSON.stringify(type.value); if(type.flags&T.TypeFlags.NumberLiteral)return String(type.value);
+    if(type.flags&T.TypeFlags.UniqueESSymbol){const symbol=type.getSymbol?.();if(symbol)return symbol.name;}
+    return null;
+  }
+  const outputs=new Map(); const plans=[];
+  for(const [mappingName,entry] of Object.entries(mappings)){
+    if(!T.isIdentifierText(mappingName,T.ScriptTarget.Latest)||!entry||typeof entry!=='object'){diagnostics.push({path:'mappings.brz.json',message:`Invalid mapping name or entry: ${mappingName}`});continue;}
+    const info=findType(entry); if(!info.declaration){diagnostics.push({path:entry.path||'mappings.brz.json',message:`Cannot find type ${entry.type||''}.`});continue;}
+    const validation=mappingTypeAt({textDocument:{uri:uri(info.source.fileName)},position:position(info.source,info.declaration.name.getStart(info.source)),text:info.source.text,clientVersion:0,keyTypeParameter:keyName});
+    if(!validation?.valid){diagnostics.push({path:entry.path,message:validation?.reason||'Invalid mapping type.'});continue;}
+    const target=path.join(outputRoot,`${entry.type}.map.ts`); const collision=outputs.get(target);if(collision){diagnostics.push({path:'mappings.brz.json',message:`Mappings ${collision} and ${mappingName} target the same generated file.`});continue;}outputs.set(target,mappingName);
+    const rows=[];
+    for(const source of sourceFiles)for(const statement of source.statements){let name,param,node;
+      if(T.isFunctionDeclaration(statement)&&statement.name&&exported(statement)){name=statement.name.text;param=statement.parameters.length===1?statement.parameters[0]:null;node=statement.name;}
+      else if(T.isVariableStatement(statement)&&exported(statement)&&statement.declarationList.declarations.length===1){const decl=statement.declarationList.declarations[0];if(T.isIdentifier(decl.name)&&(T.isArrowFunction(decl.initializer)||T.isFunctionExpression(decl.initializer))){name=decl.name.text;param=decl.initializer.parameters.length===1?decl.initializer.parameters[0]:null;node=decl.name;}}
+      if(!name||!param||param.questionToken||param.dotDotDotToken||!param.type)continue;
+      const parameterType=checker.getTypeFromTypeNode(param.type);if(canonical(parameterType.aliasSymbol||parameterType.getSymbol?.())!==info.symbol)continue;
+      const referenceArgs=checker.getTypeArguments?.(parameterType)||[];const args=referenceArgs.length?referenceArgs:(parameterType.aliasTypeArguments||[]);if(!args.length)continue;const expression=keyExpression(args[0],param.type);if(expression)rows.push({expression,name,file:source.fileName,node,keyType:args[0],key:checker.typeToString(args[0])});
+    }
+    const duplicates=[...new Set(rows.filter((row,index)=>rows.findIndex(other=>other.key===row.key)!==index).map(row=>row.key))];if(duplicates.length){diagnostics.push({path:entry.path,message:`Duplicate mapping keys: ${duplicates.join(', ')}.`});continue;}
+    const domain=finiteDomain(info.declaration.typeParameters?.[0]);if(entry.requireAllKeys){if(!domain){diagnostics.push({path:entry.path,message:'Require all keys needs a finite literal or enum key constraint.'});continue;}const missing=domain.filter(key=>!rows.some(row=>row.expression===key));if(missing.length){diagnostics.push({path:entry.path,message:`Missing mapping keys: ${missing.join(', ')}.`});continue;}}
+    const imports=new Map(),used=new Map([[mappingName,'mapping']]);
+    const addImport=(file,name)=>{const spec=moduleSpecifier(target,file);const names=imports.get(spec)||new Map();if(names.has(name))return names.get(name);let local=name,index=2;while(used.has(local)&&used.get(local)!==`${spec}\0${name}`)local=`${name}_${index++}`;used.set(local,`${spec}\0${name}`);names.set(name,local);imports.set(spec,names);return local;};
+    rows.sort((a,b)=>a.expression.localeCompare(b.expression)||a.file.localeCompare(b.file)||a.name.localeCompare(b.name));for(const row of rows)row.localName=addImport(row.file,row.name);
+    for(const row of rows){const first=row.expression.split('.')[0];if(first!==row.expression){const member=row.keyType.getSymbol?.();const symbol=canonical(member?.parent||checker.resolveName(first,row.node,T.SymbolFlags.Value,false));const declaration=symbol?.declarations?.[0];if(declaration){const exported=symbol.name||first;const local=addImport(declaration.getSourceFile().fileName,exported);row.expression=local+row.expression.slice(first.length);}}else if(row.keyType.flags&T.TypeFlags.UniqueESSymbol){const symbol=canonical(row.keyType.getSymbol?.());const declaration=symbol?.declarations?.[0];if(declaration)row.expression=addImport(declaration.getSourceFile().fileName,symbol.name);}}
+    const importText=[...imports.entries()].sort(([a],[b])=>a.localeCompare(b)).map(([spec,names])=>{const list=[...names.entries()].sort(([a],[b])=>a.localeCompare(b)).map(([name,local])=>name===local?name:`${name} as ${local}`);return list.length===1?`import { ${list[0]} } from ${JSON.stringify(spec)};`:`import {\n${list.map(name=>`  ${name},`).join('\n')}\n} from ${JSON.stringify(spec)};`;}).join('\n');
+    const body=rows.map(row=>`  [${row.expression}]: ${row.localName},`).join('\n');plans.push({path:path.relative(root,target).replace(/\\/g,'/'),content:`${importText}${importText?'\n\n':''}export const ${mappingName} = {\n${body}${body?'\n':''}} as const;\n`});
+  }
+  return {files:plans,diagnostics};
+}
 async function handle(message) {
   if (message.method === 'extensionCompletions') {
     extensionService ??= require('./extensions.cjs')(loadTypeScript(), root, overlays);
@@ -204,6 +280,8 @@ async function handle(message) {
   if (message.method === 'resolveLiteral') return resolve(message.params);
   if (message.method === 'navigationTargets') return navigationTargets(message.params);
   if (message.method === 'renamePlan') return renamePlan(message.params);
+  if (message.method === 'mappingTypeAt') return mappingTypeAt(message.params);
+  if (message.method === 'mappingGeneration') return mappingGeneration();
   if (message.method === 'enumToUnionPlan') return enumToUnionPlan(message.params);
   return null;
 }

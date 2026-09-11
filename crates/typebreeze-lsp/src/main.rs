@@ -165,6 +165,11 @@ fn handle_request(connection: &Connection, workers: &RuntimeWorkers, req: Reques
             .ok()
             .flatten(),
         "typeBreeze/renamePlan" => worker.request("renamePlan", req.params).ok().flatten(),
+        "typeBreeze/mappingTypeAt" => worker.request("mappingTypeAt", req.params).ok().flatten(),
+        "typeBreeze/mappingGeneration" => worker
+            .request("mappingGeneration", req.params)
+            .ok()
+            .flatten(),
         "typeBreeze/enumToUnionPlan" => {
             worker.request("enumToUnionPlan", req.params).ok().flatten()
         }

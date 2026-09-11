@@ -8,7 +8,7 @@ generation, and asset-import generation.
 | --- | --- |
 | Union intelligence | Feature-complete, but not yet stable |
 | TypeScript extension methods | Feature-complete, but not yet stable |
-| Mapping auto-generation | Planning |
+| Mapping auto-generation | Implemented, but not yet stable |
 | Asset-import auto-generation | Planning |
 
 ## Union intelligence
@@ -116,11 +116,22 @@ no TypeBreeze runtime.
 
 ## Mapping auto-generation
 
-**Status: planning.** This feature will generate type-safe mapping code from
-TypeScript source information, reducing repetitive hand-written transformations
-while keeping the generated result explicit and reviewable. Its workflows,
-configuration, and supported mapping patterns have not been finalized and will
-be designed before implementation begins.
+**Status: implemented, but not yet stable.** Put the caret on an eligible generic
+type alias or interface and use **Create auto-mapping for “TypeName” type** from
+the editor context menu. TypeBreeze records the mapping in the workspace-root
+`mappings.brz.json` and maintains `<TypeName>.map.ts` in the configured output
+directory.
+
+The first generic parameter must use the configured name (by default `TKey`),
+have a `PropertyKey`-compatible constraint, and produce an object type. Exported
+named functions with exactly one required parameter contribute entries when that
+parameter instantiates the configured type. The concrete first type argument is
+used as the mapping key. Optional exhaustive checking reports missing or duplicate
+keys while preserving the last valid generated file.
+
+Generated imports prefer aliases from the active TypeScript project's `paths`,
+then `baseUrl`, and fall back to relative imports. Generation runs when the
+project opens and after relevant configuration or TypeScript filesystem changes.
 
 ## Asset-import auto-generation
 

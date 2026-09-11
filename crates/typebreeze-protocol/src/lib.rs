@@ -59,6 +59,46 @@ pub struct ExtensionOffsetEdit {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct MappingTypeParams {
+    pub text_document: lsp_types::TextDocumentIdentifier,
+    pub position: lsp_types::Position,
+    pub text: String,
+    pub client_version: i64,
+    pub key_type_parameter: String,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MappingTypeInfo {
+    pub valid: bool,
+    pub reason: Option<String>,
+    pub type_name: String,
+    pub path: String,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MappingGenerationPlan {
+    pub files: Vec<GeneratedMappingFile>,
+    pub diagnostics: Vec<MappingDiagnostic>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GeneratedMappingFile {
+    pub path: String,
+    pub content: String,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MappingDiagnostic {
+    pub path: String,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DocumentUnionsParams {
     pub text_document: lsp_types::TextDocumentIdentifier,
     pub text: String,

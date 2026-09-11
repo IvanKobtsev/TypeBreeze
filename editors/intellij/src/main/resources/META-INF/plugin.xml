@@ -31,6 +31,9 @@
     <notificationGroup id="TypeBreeze" displayType="BALLOON"/>
   </extensions>
   <actions>
+    <action id="dev.typebreeze.webstorm.CreateAutoMapping" class="dev.typebreeze.webstorm.CreateAutoMappingAction" text="Create auto-mapping" description="Generate a type-driven mapping">
+      <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+    </action>
     <action id="dev.typebreeze.webstorm.ChangeUnionMember" class="dev.typebreeze.webstorm.ChangeUnionMemberAction" text="Change Union Member" description="Choose another contextual union member">
       <keyboard-shortcut keymap="$default" first-keystroke="alt shift U"/>
       <add-to-group group-id="EditorPopupMenu" anchor="last"/>

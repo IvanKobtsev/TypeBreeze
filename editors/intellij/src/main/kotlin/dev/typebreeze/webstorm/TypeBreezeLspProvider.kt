@@ -13,7 +13,7 @@ import java.security.MessageDigest
 import org.eclipse.lsp4j.services.LanguageServer
 
 class TypeBreezeLspProvider : LspIntegrationProvider {
-    override fun fileOpened(project: Project, file: VirtualFile, clientStarter: LspIntegrationProvider.LspClientStarter) { if (supports(file)){clientStarter.ensureClientStarted(Descriptor(project));project.getService(UnionCache::class.java).refresh(file);project.getService(ExtensionStyleCache::class.java).refresh(file)} }
+    override fun fileOpened(project: Project, file: VirtualFile, clientStarter: LspIntegrationProvider.LspClientStarter) { if (supports(file)){clientStarter.ensureClientStarted(Descriptor(project));project.getService(UnionCache::class.java).refresh(file);project.getService(ExtensionStyleCache::class.java).refresh(file);project.getService(MappingGenerationService::class.java).schedule(file)} }
     companion object { fun supports(file: VirtualFile)=file.extension?.lowercase() in setOf("ts","tsx") }
 }
 private class Descriptor(project: Project):ProjectWideLspClientDescriptor(project,"TypeBreeze") {
