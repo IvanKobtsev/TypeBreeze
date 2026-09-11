@@ -47,13 +47,13 @@ class CreateAutoMappingAction : AnAction() {
         if(config==null){
             val output=Messages.showInputDialog(project,"Generated files folder, relative to the workspace:","Create mappings.brz.json",Messages.getQuestionIcon(),"src/generated",null)?.trim()?.takeIf(String::isNotEmpty)?:return
             val resolved=root.resolve(output).normalize();if(!resolved.startsWith(root)){notify(project,"Output folder must be inside the workspace.");return}
-            config=JsonObject().apply { addProperty("outputDirectory",output.replace('\\','/'));addProperty("keyTypeParameter","TKey");add("mappings",JsonObject()) }
+            config=JsonObject().apply { addProperty("outputDirectory",output.replace('\\','/'));addProperty("keyTypeParameter","TKey");addProperty("resultTypeParameter","TResult");add("mappings",JsonObject()) }
         }
         val mappingConfig=config?:return
-        val keyName=mappingConfig.get("keyTypeParameter")?.asString?:"TKey"; val document=editor.document; val stamp=document.modificationStamp
+        val keyName=mappingConfig.get("keyTypeParameter")?.asString?:"TKey";val resultName=mappingConfig.get("resultTypeParameter")?.asString?:"TResult"; val document=editor.document; val stamp=document.modificationStamp
         val offset=editor.caretModel.offset; val line=document.getLineNumber(offset); val position=Position(line,offset-document.getLineStartOffset(line))
         AppExecutorUtil.getAppExecutorService().execute {
-            val info=LspClientManager.getInstance(project).getClients(TypeBreezeLspProvider::class.java).filter{it.descriptor.isSupportedFile(file)}.firstNotNullOfOrNull { client -> runCatching { client.sendRequestSync(10_000){server->(server as TypeBreezeLanguageServer).mappingTypeAt(MappingTypeParams(client.getDocumentIdentifier(file),position,document.text,stamp,keyName))} }.getOrNull() }
+            val info=LspClientManager.getInstance(project).getClients(TypeBreezeLspProvider::class.java).filter{it.descriptor.isSupportedFile(file)}.firstNotNullOfOrNull { client -> runCatching { client.sendRequestSync(10_000){server->(server as TypeBreezeLanguageServer).mappingTypeAt(MappingTypeParams(client.getDocumentIdentifier(file),position,document.text,stamp,keyName,resultName))} }.getOrNull() }
             ApplicationManager.getApplication().invokeLater {
                 if(info==null){notify(project,"The TypeScript mapping validator is not ready.");return@invokeLater}
                 if(!info.valid){notify(project,info.reason?:"This type cannot be used for auto-mapping.");return@invokeLater}
@@ -129,7 +129,17 @@ class MappingGenerationService(private val project:Project):Disposable {
 class MappingOccurrenceCache(private val project:Project) {
     private val entries=java.util.concurrent.ConcurrentHashMap<String,List<MappingOccurrence>>()
     fun replace(occurrences:List<MappingOccurrence>){val affected=entries.keys.toSet()+occurrences.map{it.uri};entries.clear();occurrences.groupBy{it.uri}.forEach{(uri,items)->entries[uri]=items};for(uri in affected)VirtualFileManager.getInstance().findFileByUrl(uri)?.let{com.intellij.psi.PsiManager.getInstance(project).findFile(it)}?.let{com.intellij.codeInsight.daemon.DaemonCodeAnalyzer.getInstance(project).restart(it)}}
-    fun matching(file:VirtualFile,range:com.intellij.openapi.util.TextRange):MappingOccurrence?=entries[file.url]?.firstOrNull{occurrence->val document=FileDocumentManager.getInstance().getDocument(file)?:return@firstOrNull false;if(occurrence.range.start.line !in 0 until document.lineCount||occurrence.range.end.line !in 0 until document.lineCount)return@firstOrNull false;val start=document.getLineStartOffset(occurrence.range.start.line)+occurrence.range.start.character;val end=document.getLineStartOffset(occurrence.range.end.line)+occurrence.range.end.character;start==range.startOffset&&end==range.endOffset}
+    fun matching(file:VirtualFile,element:com.intellij.psi.PsiElement):MappingOccurrence? {
+        val document=FileDocumentManager.getInstance().getDocument(file)?:return null
+        return entries[file.url]?.firstOrNull { occurrence ->
+            if(occurrence.range.start.line !in 0 until document.lineCount||occurrence.range.end.line !in 0 until document.lineCount){if(element===element.containingFile&&LOG.isDebugEnabled)LOG.debug("Unmatched mapping occurrence ${occurrence.uri}:${occurrence.range}; invalid document line range") ;return@firstOrNull false}
+            val wanted=com.intellij.openapi.util.TextRange(document.getLineStartOffset(occurrence.range.start.line)+occurrence.range.start.character,document.getLineStartOffset(occurrence.range.end.line)+occurrence.range.end.character)
+            if(!element.textRange.contains(wanted)){if(element===element.containingFile&&LOG.isDebugEnabled){val nearby=element.containingFile.findElementAt(wanted.startOffset.coerceIn(0,document.textLength.coerceAtLeast(1)-1));LOG.debug("Unmatched mapping occurrence ${occurrence.uri}:${occurrence.range}; nearby PSI ${nearby?.javaClass?.name}")} ;return@firstOrNull false}
+            val childContains=element.children.any{it.textRange.contains(wanted)}
+            if(!childContains)true else false
+        }
+    }
     fun navigate(source:VirtualFile,occurrence:MappingOccurrence){val manager=VirtualFileManager.getInstance();manager.findFileByUrl(occurrence.targetUri)?.let{FileEditorManager.getInstance(project).openFile(it,true);return};project.getService(MappingGenerationService::class.java).regenerate(source);openWhenReady(occurrence.targetUri,0)}
     private fun openWhenReady(targetUri:String,attempt:Int){AppExecutorUtil.getAppScheduledExecutorService().schedule({ApplicationManager.getApplication().invokeLater{val file=VirtualFileManager.getInstance().refreshAndFindFileByUrl(targetUri);if(file!=null)FileEditorManager.getInstance(project).openFile(file,true)else if(attempt<30)openWhenReady(targetUri,attempt+1)}},250,TimeUnit.MILLISECONDS)}
+    companion object{private val LOG=Logger.getInstance(MappingOccurrenceCache::class.java)}
 }

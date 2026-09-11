@@ -18,6 +18,8 @@
     <annotator language="TypeScript" implementationClass="dev.typebreeze.webstorm.ExtensionMethodAnnotator"/>
     <codeInsight.lineMarkerProvider language="TypeScript" implementationClass="dev.typebreeze.webstorm.MappingLineMarkerProvider"/>
     <codeInsight.lineMarkerProvider language="TypeScript JSX" implementationClass="dev.typebreeze.webstorm.MappingLineMarkerProvider"/>
+    <codeInsight.lineMarkerProvider language="JavaScript" implementationClass="dev.typebreeze.webstorm.MappingLineMarkerProvider"/>
+    <codeInsight.lineMarkerProvider language="JavaScript JSX" implementationClass="dev.typebreeze.webstorm.MappingLineMarkerProvider"/>
     <colorSettingsPage implementation="dev.typebreeze.webstorm.TypeBreezeColorSettingsPage"/>
     <applicationConfigurable id="typebreeze.settings" displayName="TypeBreeze" instance="dev.typebreeze.webstorm.TypeBreezeConfigurable"/>
     <intentionAction>

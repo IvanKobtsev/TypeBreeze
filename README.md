@@ -131,6 +131,12 @@ used as the mapping key. Optional exhaustive checking emits a
 typechecking reports missing keys. Duplicate keys and invalid connector usages
 are reported directly by TypeBreeze.
 
+Set `resultTypeParameter` in `mappings.brz.json` (default: `TResult`) to reserve
+an optional final connector generic for mapped-function return values. When a
+connector declares it, it must have a default. TypeBreeze uses that default or
+each function's explicit override to emit return-checking `satisfies` contracts;
+connectors without it keep the existing `unknown` behavior.
+
 Configured connector types and their mapped functions receive gutter markers
 that navigate to the generated file. Functions using a connector must be named
 exports with exactly one required, non-rest parameter; default exports and other

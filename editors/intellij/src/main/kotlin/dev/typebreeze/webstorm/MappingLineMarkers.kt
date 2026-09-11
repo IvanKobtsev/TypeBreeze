@@ -9,10 +9,10 @@ import com.intellij.psi.PsiElement
 
 class MappingLineMarkerProvider:LineMarkerProvider {
     override fun getLineMarkerInfo(element:PsiElement):LineMarkerInfo<*>? {
-        if(element.firstChild!=null)return null
         val file=element.containingFile?.virtualFile?:return null
         if(!TypeBreezeLspProvider.supports(file))return null
-        val occurrence=element.project.getService(MappingOccurrenceCache::class.java).matching(file,element.textRange)?:return null
+        val cache=element.project.getService(MappingOccurrenceCache::class.java)
+        val occurrence=cache.matching(file,element)?:return null
         val connector=occurrence.kind=="connector"
         val tooltip=buildString { append(if(connector)"Auto-mapping connector for " else "Mapped component in ");append(occurrence.mappingName);occurrence.reason?.let{append(" — ");append(it)} }
         val icon=if(connector)AllIcons.Nodes.Type else AllIcons.Nodes.Function

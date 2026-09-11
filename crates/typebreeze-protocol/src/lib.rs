@@ -65,6 +65,12 @@ pub struct MappingTypeParams {
     pub text: String,
     pub client_version: i64,
     pub key_type_parameter: String,
+    #[serde(default = "default_result_type_parameter")]
+    pub result_type_parameter: String,
+}
+
+fn default_result_type_parameter() -> String {
+    "TResult".to_owned()
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
