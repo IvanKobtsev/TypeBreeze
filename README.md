@@ -1,14 +1,15 @@
 # TypeBreeze
 
-TypeBreeze enhances the TypeScript editing experience in WebStorm with four
+TypeBreeze enhances the TypeScript editing experience in WebStorm with five
 compiler-backed feature areas: union intelligence, extension methods, mapping
-generation, and asset-import generation.
+generation, overload diff highlighting, and asset-import generation.
 
 | Feature | Status |
 | --- | --- |
 | Union intelligence | Feature-complete, but not yet stable |
 | TypeScript extension methods | Feature-complete, but not yet stable |
 | Mapping auto-generation | Implemented, but not yet stable |
+| Overload diff highlighting | Implemented, but not yet stable |
 | Asset-import auto-generation | Planning |
 
 ## Union intelligence
@@ -149,6 +150,18 @@ When the workspace provides Prettier, generated maps are formatted with the
 configuration resolved for each output file before TypeBreeze compares or writes
 their contents. Projects without Prettier use TypeBreeze's deterministic built-in
 formatting.
+
+## Overload diff highlighting
+
+**Status: implemented, but not yet stable.** TypeBreeze fades the parts of
+consecutive TypeScript overload signatures that are structurally identical across
+the complete overload group, leaving changed parameter and return types prominent.
+It supports standalone functions and class or interface methods, ignores formatting
+and comments, and never fades an implementation signature or changes source code.
+
+The feature is enabled by default under **Settings | TypeBreeze | Fade repeated
+overload syntax**. Its appearance is independently configurable under **Editor |
+Color Scheme | TypeBreeze | Repeated overload syntax**.
 
 ## Asset-import auto-generation
 
