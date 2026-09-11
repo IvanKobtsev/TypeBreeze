@@ -4,6 +4,8 @@ import com.intellij.lang.annotation.Annotator
 import com.intellij.lang.annotation.AnnotationHolder
 import com.intellij.lang.annotation.HighlightSeverity
 import com.intellij.lang.javascript.psi.JSFunction
+import com.intellij.openapi.editor.colors.EditorColorsManager
+import com.intellij.openapi.editor.markup.TextAttributes
 import com.intellij.openapi.util.TextRange
 import com.intellij.psi.PsiComment
 import com.intellij.psi.PsiElement
@@ -17,10 +19,15 @@ import com.intellij.psi.util.PsiTreeUtil
 class OverloadDiffAnnotator : Annotator {
     override fun annotate(element: PsiElement, holder: AnnotationHolder) {
         if (element !is PsiFile || !TypeBreezeSettings.instance.state.fadeRepeatedOverloadSyntax) return
+        // TypeScript semantic highlighting is applied after ordinary text-attribute keys and
+        // otherwise restores keyword/type colors inside our ranges. Resolve the user's configured
+        // TypeBreeze style, then enforce it so every token in a repeated component is consistently faded.
+        val fadedAttributes = EditorColorsManager.getInstance().globalScheme
+            .getAttributes(TypeBreezeColors.REPEATED_OVERLOAD) ?: TextAttributes()
         OverloadDiffAnalyzer.ranges(element).forEach {
             holder.newSilentAnnotation(HighlightSeverity.INFORMATION)
                 .range(it)
-                .textAttributes(TypeBreezeColors.REPEATED_OVERLOAD)
+                .enforcedTextAttributes(fadedAttributes)
                 .create()
         }
     }
