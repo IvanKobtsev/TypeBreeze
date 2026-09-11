@@ -74,13 +74,41 @@ pub struct MappingTypeInfo {
     pub reason: Option<String>,
     pub type_name: String,
     pub path: String,
+    #[serde(default)]
+    pub finite_key_domain: bool,
+    #[serde(default)]
+    pub key_domain_type: String,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MappingGenerationPlan {
+    #[serde(default)]
     pub files: Vec<GeneratedMappingFile>,
+    #[serde(default)]
     pub diagnostics: Vec<MappingDiagnostic>,
+    #[serde(default)]
+    pub occurrences: Vec<MappingOccurrence>,
+    #[serde(default)]
+    pub diagnostic_documents: Vec<lsp_types::PublishDiagnosticsParams>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MappingOccurrence {
+    pub uri: Url,
+    pub range: Range,
+    pub kind: MappingOccurrenceKind,
+    pub mapping_name: String,
+    pub target_uri: Url,
+    pub reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MappingOccurrenceKind {
+    Connector,
+    Component,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

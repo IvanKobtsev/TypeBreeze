@@ -2,6 +2,7 @@ package dev.typebreeze.webstorm
 
 import org.eclipse.lsp4j.Range
 import org.eclipse.lsp4j.TextDocumentIdentifier
+import org.eclipse.lsp4j.PublishDiagnosticsParams
 import org.eclipse.lsp4j.jsonrpc.services.JsonRequest
 import org.eclipse.lsp4j.services.LanguageServer
 import java.util.concurrent.CompletableFuture
@@ -55,7 +56,8 @@ data class EnumDocumentSnapshot(val uri:String="",val expectedText:String="")
 data class EnumTextEdit(val uri:String="",val range:Range=Range(),val expectedText:String="",val newText:String="")
 data class EnumToUnionPlan(val enumName:String?=null,val needsObject:Boolean?=null,val reason:String?=null,val location:SourceLocation?=null,val documents:List<EnumDocumentSnapshot> = emptyList(),val edits:List<EnumTextEdit> = emptyList())
 data class MappingTypeParams(val textDocument:TextDocumentIdentifier,val position:org.eclipse.lsp4j.Position,val text:String,val clientVersion:Long,val keyTypeParameter:String)
-data class MappingTypeInfo(val valid:Boolean=false,val reason:String?=null,val typeName:String="",val path:String="")
+data class MappingTypeInfo(val valid:Boolean=false,val reason:String?=null,val typeName:String="",val path:String="",val finiteKeyDomain:Boolean=false,val keyDomainType:String="")
 data class GeneratedMappingFile(val path:String="",val content:String="")
 data class MappingDiagnostic(val path:String="",val message:String="")
-data class MappingGenerationPlan(val files:List<GeneratedMappingFile> = emptyList(),val diagnostics:List<MappingDiagnostic> = emptyList())
+data class MappingOccurrence(val uri:String="",val range:Range=Range(),val kind:String="connector",val mappingName:String="",val targetUri:String="",val reason:String?=null)
+data class MappingGenerationPlan(val files:List<GeneratedMappingFile> = emptyList(),val diagnostics:List<MappingDiagnostic> = emptyList(),val occurrences:List<MappingOccurrence> = emptyList(),val diagnosticDocuments:List<PublishDiagnosticsParams> = emptyList())

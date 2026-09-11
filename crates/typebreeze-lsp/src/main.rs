@@ -13,6 +13,7 @@ use lsp_types::{
     request::{GotoDefinition, HoverRequest},
 };
 use std::{
+    collections::HashSet,
     fs,
     io::{BufRead, BufReader, Write},
     path::Path,
@@ -54,6 +55,7 @@ fn main() -> Result<()> {
                 ));
                 error
             })?,
+        mapping_diagnostic_uris: Mutex::new(HashSet::new()),
     };
     log("TypeScript compiler workers ready");
     run(&connection, Arc::new(workers))?;
@@ -63,6 +65,7 @@ fn main() -> Result<()> {
 struct RuntimeWorkers {
     semantics: Arc<CompilerWorker>,
     extensions: Arc<CompilerWorker>,
+    mapping_diagnostic_uris: Mutex<HashSet<Url>>,
 }
 fn run(connection: &Connection, workers: Arc<RuntimeWorkers>) -> Result<()> {
     for msg in &connection.receiver {
@@ -155,6 +158,34 @@ fn publish_extension_diagnostics(connection: &Connection, worker: &CompilerWorke
             )));
     }
 }
+fn publish_mapping_diagnostics(
+    connection: &Connection,
+    workers: &RuntimeWorkers,
+    documents: Vec<lsp_types::PublishDiagnosticsParams>,
+) {
+    let current = documents
+        .iter()
+        .map(|document| document.uri.clone())
+        .collect::<HashSet<_>>();
+    let previous = workers
+        .mapping_diagnostic_uris
+        .lock()
+        .map(|mut uris| std::mem::replace(&mut *uris, current.clone()))
+        .unwrap_or_default();
+    for params in documents.into_iter().chain(
+        previous
+            .difference(&current)
+            .cloned()
+            .map(|uri| lsp_types::PublishDiagnosticsParams::new(uri, Vec::new(), None)),
+    ) {
+        let _ = connection
+            .sender
+            .send(Message::Notification(Notification::new(
+                PublishDiagnostics::METHOD.to_owned(),
+                params,
+            )));
+    }
+}
 fn handle_request(connection: &Connection, workers: &RuntimeWorkers, req: Request) {
     let worker = &workers.semantics;
     let result = match req.method.as_str() {
@@ -166,10 +197,20 @@ fn handle_request(connection: &Connection, workers: &RuntimeWorkers, req: Reques
             .flatten(),
         "typeBreeze/renamePlan" => worker.request("renamePlan", req.params).ok().flatten(),
         "typeBreeze/mappingTypeAt" => worker.request("mappingTypeAt", req.params).ok().flatten(),
-        "typeBreeze/mappingGeneration" => worker
-            .request("mappingGeneration", req.params)
-            .ok()
-            .flatten(),
+        "typeBreeze/mappingGeneration" => {
+            let result = worker
+                .request("mappingGeneration", req.params)
+                .ok()
+                .flatten();
+            if let Some(value) = result.as_ref()
+                && let Ok(plan) = serde_json::from_value::<typebreeze_protocol::MappingGenerationPlan>(
+                    value.clone(),
+                )
+            {
+                publish_mapping_diagnostics(connection, workers, plan.diagnostic_documents);
+            }
+            result
+        }
         "typeBreeze/enumToUnionPlan" => {
             worker.request("enumToUnionPlan", req.params).ok().flatten()
         }

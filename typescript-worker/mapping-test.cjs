@@ -1,8 +1,41 @@
-const assert=require('node:assert/strict');const fs=require('node:fs');const os=require('node:os');const path=require('node:path');const{spawn}=require('node:child_process');const{pathToFileURL}=require('node:url');
-const root=fs.mkdtempSync(path.join(os.tmpdir(),'typebreeze-map-'));
-fs.mkdirSync(path.join(root,'src'));fs.writeFileSync(path.join(root,'tsconfig.json'),JSON.stringify({compilerOptions:{strict:true,module:'ESNext',moduleResolution:'Bundler',baseUrl:'.',paths:{'@/*':['src/*']}}}));
-fs.writeFileSync(path.join(root,'src/types.ts'),`export enum Kind { System='system', Mention='mention' }\nexport type Template<TKey extends Kind,TProps extends {}>={payload:TProps};`);
-fs.writeFileSync(path.join(root,'src/templates.ts'),`import {Kind,Template} from '@/types';\nexport function System(value:Template<Kind.System,{}>){return value}\nexport const Mention=(value:Template<Kind.Mention,{}>)=>value;`);
-fs.writeFileSync(path.join(root,'mappings.brz.json'),JSON.stringify({outputDirectory:'src/generated',keyTypeParameter:'TKey',mappings:{Templates:{path:'src/types.ts',type:'Template',requireAllKeys:true}}}));
-const child=spawn(process.execPath,[path.join(__dirname,'worker.cjs')],{env:{...process.env,NODE_PATH:path.resolve(__dirname,'../node_modules')},stdio:['pipe','pipe','inherit']});let buffer='',id=0;const pending=new Map();child.stdout.on('data',chunk=>{buffer+=chunk;for(let end;(end=buffer.indexOf('\n'))>=0;){const message=JSON.parse(buffer.slice(0,end));buffer=buffer.slice(end+1);pending.get(message.id)?.(message.result);pending.delete(message.id);}});function request(method,params={}){return new Promise(resolve=>{const requestId=++id;pending.set(requestId,resolve);child.stdin.write(JSON.stringify({id:requestId,method,params})+'\n');});}
-(async()=>{try{await request('initialize',{root,extensions:false});const source=fs.readFileSync(path.join(root,'src/types.ts'),'utf8');const validation=await request('mappingTypeAt',{textDocument:{uri:pathToFileURL(path.join(root,'src/types.ts')).href},position:{line:1,character:13},text:source,clientVersion:1,keyTypeParameter:'TKey'});assert.equal(validation.valid,true);const plan=await request('mappingGeneration');assert.deepEqual(plan.diagnostics,[]);assert.equal(plan.files[0].path,'src/generated/Template.map.ts');assert.match(plan.files[0].content,/from "@\/templates"/);assert.match(plan.files[0].content,/\[Kind\.System\]: System/);assert.match(plan.files[0].content,/export const Templates/);console.log('Mapping generation tests passed');}finally{child.kill();fs.rmSync(root,{recursive:true,force:true});}})().catch(error=>{console.error(error);process.exitCode=1});
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { spawn } = require('node:child_process');
+const { pathToFileURL } = require('node:url');
+const root = fs.mkdtempSync(path.join(os.tmpdir(), 'typebreeze-map-'));
+fs.mkdirSync(path.join(root, 'src'));
+fs.writeFileSync(path.join(root, 'tsconfig.json'), JSON.stringify({ compilerOptions: { strict: true, module: 'ESNext', moduleResolution: 'Bundler', baseUrl: '.', paths: { '@/*': ['src/*'] } } }));
+fs.writeFileSync(path.join(root, 'src/types.ts'), `export enum Kind { System='system', Mention='mention' }
+export type Template<TKey extends Kind,TProps extends {}>={payload:TProps};
+export type Wide<TKey extends string>={key:TKey};`);
+fs.writeFileSync(path.join(root, 'src/templates.ts'), `import {Kind,Template} from '@/types';
+export function System(value:Template<Kind.System,{}>){return value}
+export default function Mention(value:Template<Kind.Mention,{}>){return value}
+export function Invalid(value:Template<Kind.Mention,{}>, extra:string){return value}`);
+fs.writeFileSync(path.join(root, 'mappings.brz.json'), JSON.stringify({ outputDirectory: 'src/generated', keyTypeParameter: 'TKey', mappings: { Templates: { path: 'src/types.ts', type: 'Template', requireAllKeys: true } } }));
+const child = spawn(process.execPath, [path.join(__dirname, 'worker.cjs')], { env: { ...process.env, NODE_PATH: path.resolve(__dirname, '../node_modules') }, stdio: ['pipe', 'pipe', 'inherit'] });
+let buffer = '', id = 0; const pending = new Map();
+child.stdout.on('data', chunk => { buffer += chunk; for (let end; (end = buffer.indexOf('\n')) >= 0;) { const message = JSON.parse(buffer.slice(0, end)); buffer = buffer.slice(end + 1); pending.get(message.id)?.(message.result); pending.delete(message.id); } });
+function request(method, params = {}) { return new Promise(resolve => { const requestId = ++id; pending.set(requestId, resolve); child.stdin.write(JSON.stringify({ id: requestId, method, params }) + '\n'); }); }
+function typeParams(source, name) { const index=source.indexOf(name);const before=source.slice(0,index);return { textDocument: { uri: pathToFileURL(path.join(root, 'src/types.ts')).href }, position: { line: before.split('\n').length - 1, character: index-before.lastIndexOf('\n') }, text: source, clientVersion: 1, keyTypeParameter: 'TKey' }; }
+(async () => {
+  try {
+    await request('initialize', { root, extensions: false });
+    const source = fs.readFileSync(path.join(root, 'src/types.ts'), 'utf8');
+    const finite = await request('mappingTypeAt', typeParams(source, 'Template'));
+    assert.equal(finite.valid, true); assert.equal(finite.finiteKeyDomain, true); assert.equal(finite.keyDomainType, 'Kind');
+    const infinite = await request('mappingTypeAt', typeParams(source, 'Wide'));
+    assert.equal(infinite.valid, true); assert.equal(infinite.finiteKeyDomain, false);
+    const plan = await request('mappingGeneration');
+    assert.deepEqual(plan.diagnostics, []); assert.equal(plan.files[0].path, 'src/generated/Template.map.ts');
+    assert.match(plan.files[0].content, /^\/\/----------------------\n\/\/ <auto-generated>/);
+    assert.match(plan.files[0].content, /from "@\/templates"/); assert.match(plan.files[0].content, /\[Kind\.System\]: System/);
+    assert.match(plan.files[0].content, /as const satisfies Record<Kind, unknown>/); assert.doesNotMatch(plan.files[0].content, /Kind\.Mention.*Mention/);
+    const sourceDiagnostics = plan.diagnosticDocuments.find(item => item.uri.endsWith('templates.ts')).diagnostics;
+    assert.equal(sourceDiagnostics.length, 2); assert(sourceDiagnostics.some(item => item.message.includes('Default exports are not supported'))); assert(sourceDiagnostics.some(item => item.message.includes('2 parameters were found')));
+    assert.equal(plan.occurrences.filter(item => item.kind === 'connector').length, 1); assert.equal(plan.occurrences.filter(item => item.kind === 'component').length, 3);
+    console.log('Mapping generation tests passed');
+  } finally { child.kill(); fs.rmSync(root, { recursive: true, force: true }); }
+})().catch(error => { console.error(error); process.exitCode = 1; });

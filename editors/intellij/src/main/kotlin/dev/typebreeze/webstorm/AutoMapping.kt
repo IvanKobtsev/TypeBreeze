@@ -12,6 +12,7 @@ import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.fileEditor.FileDocumentManagerListener
+import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.ui.Messages
@@ -57,7 +58,7 @@ class CreateAutoMappingAction : AnAction() {
             ApplicationManager.getApplication().invokeLater {
                 if(info==null){notify(project,"The TypeScript mapping validator is not ready.");return@invokeLater}
                 if(!info.valid){notify(project,info.reason?:"This type cannot be used for auto-mapping.");return@invokeLater}
-                val dialog=MappingDialog(project,info.typeName);if(!dialog.showAndGet())return@invokeLater
+                val dialog=MappingDialog(project,info.typeName,info.finiteKeyDomain);if(!dialog.showAndGet())return@invokeLater
                 val mappings=(mappingConfig.get("mappings") as? JsonObject)?:JsonObject().also{mappingConfig.add("mappings",it)}
                 if(mappings.has(dialog.mappingName)){notify(project,"A mapping named ${dialog.mappingName} already exists.");return@invokeLater}
                 mappings.add(dialog.mappingName,JsonObject().apply { addProperty("path",info.path);addProperty("type",info.typeName);addProperty("requireAllKeys",dialog.requireAllKeys) })
@@ -83,9 +84,9 @@ private fun writeConfig(project:Project,path:Path,config:JsonObject){
 }
 private fun notify(project:Project,message:String)=com.intellij.notification.NotificationGroupManager.getInstance().getNotificationGroup("TypeBreeze").createNotification("Auto-mapping",message,com.intellij.notification.NotificationType.WARNING).notify(project)
 
-private class MappingDialog(project:Project,typeName:String):DialogWrapper(project) {
+private class MappingDialog(project:Project,typeName:String,finiteKeyDomain:Boolean):DialogWrapper(project) {
     private val mappingNameField=JBTextField(typeName.removeSuffix("Props").let{"${it}s"})
-    private val exhaustive=JBCheckBox("Require all keys to be defined",true)
+    private val exhaustive=JBCheckBox("Require all keys to be defined",finiteKeyDomain).apply{isEnabled=finiteKeyDomain}
     val mappingName:String get()=mappingNameField.text.trim();val requireAllKeys:Boolean get()=exhaustive.isSelected
     init{title="Create auto-mapping for \"$typeName\" type";init()}
     override fun createCenterPanel():JComponent=JPanel(BorderLayout(0,8)).apply { add(JBLabel("Mapping name:"),BorderLayout.NORTH);add(mappingNameField,BorderLayout.CENTER);add(exhaustive,BorderLayout.SOUTH) }
@@ -109,10 +110,19 @@ class MappingGenerationService(private val project:Project):Disposable {
             ApplicationManager.getApplication().invokeLater {
                 val root=Path.of(project.basePath!!).normalize()
                 ApplicationManager.getApplication().runWriteAction { for(generated in plan.files){val target=root.resolve(generated.path).normalize();if(!target.startsWith(root))continue;val parent=VfsUtil.createDirectoryIfMissing(target.parent.toString())?:continue;val out=parent.findChild(target.fileName.toString())?:parent.createChildData(this,target.fileName.toString());if(VfsUtil.loadText(out)!=generated.content)VfsUtil.saveText(out,generated.content)} }
+                project.getService(MappingOccurrenceCache::class.java).replace(plan.occurrences)
                 if(plan.diagnostics.isNotEmpty())notify(project,plan.diagnostics.joinToString("\n"){"${it.path}: ${it.message}"})
             }
         }
     }
     override fun dispose() {}
     companion object{private val LOG=Logger.getInstance(MappingGenerationService::class.java)}
+}
+
+@Service(Service.Level.PROJECT)
+class MappingOccurrenceCache(private val project:Project) {
+    private val entries=java.util.concurrent.ConcurrentHashMap<String,List<MappingOccurrence>>()
+    fun replace(occurrences:List<MappingOccurrence>){val affected=entries.keys.toSet()+occurrences.map{it.uri};entries.clear();occurrences.groupBy{it.uri}.forEach{(uri,items)->entries[uri]=items};for(uri in affected)VirtualFileManager.getInstance().findFileByUrl(uri)?.let{com.intellij.psi.PsiManager.getInstance(project).findFile(it)}?.let{com.intellij.codeInsight.daemon.DaemonCodeAnalyzer.getInstance(project).restart(it)}}
+    fun matching(file:VirtualFile,range:com.intellij.openapi.util.TextRange):MappingOccurrence?=entries[file.url]?.firstOrNull{occurrence->val document=FileDocumentManager.getInstance().getDocument(file)?:return@firstOrNull false;if(occurrence.range.start.line !in 0 until document.lineCount||occurrence.range.end.line !in 0 until document.lineCount)return@firstOrNull false;val start=document.getLineStartOffset(occurrence.range.start.line)+occurrence.range.start.character;val end=document.getLineStartOffset(occurrence.range.end.line)+occurrence.range.end.character;start==range.startOffset&&end==range.endOffset}
+    fun navigate(source:VirtualFile,occurrence:MappingOccurrence){val manager=VirtualFileManager.getInstance();manager.findFileByUrl(occurrence.targetUri)?.let{FileEditorManager.getInstance(project).openFile(it,true);return};project.getService(MappingGenerationService::class.java).regenerate(source);AppExecutorUtil.getAppScheduledExecutorService().schedule({ApplicationManager.getApplication().invokeLater{manager.refreshAndFindFileByUrl(occurrence.targetUri)?.let{FileEditorManager.getInstance(project).openFile(it,true)}}},500,TimeUnit.MILLISECONDS)}
 }

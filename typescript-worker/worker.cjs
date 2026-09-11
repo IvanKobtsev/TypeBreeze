@@ -191,6 +191,12 @@ function renamePlan(params){
   return{oldValue,contextualTypeName:selected.contextualTypeName,targets};
 }
 
+function mappingDomainInfo(T,checker,parameter) {
+  if(!parameter?.constraint)return{finite:false,typeText:''};
+  const type=checker.getTypeFromTypeNode(parameter.constraint);const parts=type.isUnion()?type.types:[type];
+  const finite=parts.length>0&&parts.every(part=>!!(part.flags&(T.TypeFlags.StringLiteral|T.TypeFlags.NumberLiteral|T.TypeFlags.EnumLiteral|T.TypeFlags.UniqueESSymbol)));
+  return{finite,typeText:checker.typeToString(type,parameter.constraint,T.TypeFormatFlags.NoTruncation)};
+}
 function mappingTypeAt(params) {
   syncParams(params);
   const program=createProgram(); const T=loadTypeScript(); const checker=program.getTypeChecker();
@@ -210,11 +216,13 @@ function mappingTypeAt(params) {
     const declared=checker.getTypeAtLocation(declaration.name);
     if(!reason&&!(declared.flags&T.TypeFlags.Object))reason='The selected type must resolve to an object type.';
   }
-  return {valid:!reason,reason,typeName:declaration.name.text,path:path.relative(root,file).replace(/\\/g,'/')};
+  const domain=mappingDomainInfo(T,checker,typeParameters[0]);
+  return {valid:!reason,reason,typeName:declaration.name.text,path:path.relative(root,file).replace(/\\/g,'/'),finiteKeyDomain:domain.finite,keyDomainType:domain.typeText};
 }
 
 function mappingGeneration() {
-  const T=loadTypeScript(); const configPath=path.join(root,'mappings.brz.json'); const diagnostics=[];
+  const T=loadTypeScript(); const configPath=path.join(root,'mappings.brz.json'); const diagnostics=[],occurrences=[],documentDiagnostics=new Map();
+  const addDocumentDiagnostic=(source,node,message)=>{const fileUri=uri(source.fileName);const list=documentDiagnostics.get(fileUri)||[];list.push({range:range(source,node.getStart(source),node.getEnd()),severity:1,source:'TypeBreeze',message});documentDiagnostics.set(fileUri,list);};
   let config; try{config=JSON.parse(fs.readFileSync(configPath,'utf8'));}catch(error){return{files:[],diagnostics:[{path:'mappings.brz.json',message:`Cannot read mappings.brz.json: ${error.message}`} ]};}
   const output=config.outputDirectory; const keyName=config.keyTypeParameter||'TKey'; const mappings=config.mappings;
   if(typeof output!=='string'||!output||!mappings||typeof mappings!=='object'||Array.isArray(mappings))return{files:[],diagnostics:[{path:'mappings.brz.json',message:'Configuration requires outputDirectory and a mappings object.'}]};
@@ -222,7 +230,6 @@ function mappingGeneration() {
   languageService=undefined; const program=createProgram(); const checker=program.getTypeChecker(); const parsedOptions=program.getCompilerOptions();
   const sourceFiles=program.getSourceFiles().filter(file=>!file.isDeclarationFile&&path.resolve(file.fileName).startsWith(root));
   const canonical=s=>canonicalSymbol(T,checker,s);
-  const exported=node=>node.modifiers?.some(m=>m.kind===T.SyntaxKind.ExportKeyword)&&!node.modifiers?.some(m=>m.kind===T.SyntaxKind.DefaultKeyword);
   const stripExtension=value=>value.replace(/(\.d)?\.[cm]?[jt]sx?$/i,'').replace(/\/index$/,'');
   function moduleSpecifier(from,to){
     const clean=path.resolve(to); const base=parsedOptions.baseUrl&&path.resolve(parsedOptions.baseUrl); const candidates=[]; let order=0;
@@ -233,7 +240,7 @@ function mappingGeneration() {
     let relative=stripExtension(path.relative(path.dirname(from),clean).replace(/\\/g,'/'));return relative.startsWith('.')?relative:`./${relative}`;
   }
   function findType(entry){const wanted=path.resolve(root,entry.path||'');const source=program.getSourceFile(wanted);if(!source)return{};let declaration;for(const statement of source.statements)if((T.isTypeAliasDeclaration(statement)||T.isInterfaceDeclaration(statement))&&statement.name.text===entry.type)declaration=statement;return{source,declaration,symbol:declaration&&canonical(checker.getSymbolAtLocation(declaration.name))};}
-  function finiteDomain(parameter){if(!parameter?.constraint)return null;const type=checker.getTypeFromTypeNode(parameter.constraint);const parts=type.isUnion()?type.types:[type];const result=[];for(const part of parts){if(part.flags&T.TypeFlags.EnumLiteral){const symbol=part.getSymbol?.();if(!symbol)return null;result.push(symbol.parent?`${checker.symbolToString(symbol.parent)}.${symbol.name}`:symbol.name);}else if(part.flags&T.TypeFlags.StringLiteral)result.push(JSON.stringify(part.value));else if(part.flags&T.TypeFlags.NumberLiteral)result.push(String(part.value));else return null;}return result;}
+  function finiteDomain(parameter){if(!parameter?.constraint)return null;const type=checker.getTypeFromTypeNode(parameter.constraint);const parts=type.isUnion()?type.types:[type];const result=[];for(const part of parts){if(part.flags&T.TypeFlags.EnumLiteral){const symbol=part.getSymbol?.();if(!symbol)return null;result.push(symbol.parent?`${checker.symbolToString(symbol.parent)}.${symbol.name}`:symbol.name);}else if(part.flags&T.TypeFlags.UniqueESSymbol){const symbol=part.getSymbol?.();if(!symbol)return null;result.push(symbol.name);}else if(part.flags&T.TypeFlags.StringLiteral)result.push(JSON.stringify(part.value));else if(part.flags&T.TypeFlags.NumberLiteral)result.push(String(part.value));else return null;}return result;}
   function keyExpression(type,node){
     if(type.flags&T.TypeFlags.EnumLiteral){const symbol=type.getSymbol?.();if(symbol){const parent=symbol.parent;return parent?`${checker.symbolToString(parent)}.${symbol.name}`:symbol.name;}}
     if(type.flags&T.TypeFlags.StringLiteral)return JSON.stringify(type.value); if(type.flags&T.TypeFlags.NumberLiteral)return String(type.value);
@@ -247,24 +254,35 @@ function mappingGeneration() {
     const validation=mappingTypeAt({textDocument:{uri:uri(info.source.fileName)},position:position(info.source,info.declaration.name.getStart(info.source)),text:info.source.text,clientVersion:0,keyTypeParameter:keyName});
     if(!validation?.valid){diagnostics.push({path:entry.path,message:validation?.reason||'Invalid mapping type.'});continue;}
     const target=path.join(outputRoot,`${entry.type}.map.ts`); const collision=outputs.get(target);if(collision){diagnostics.push({path:'mappings.brz.json',message:`Mappings ${collision} and ${mappingName} target the same generated file.`});continue;}outputs.set(target,mappingName);
-    const rows=[];
-    for(const source of sourceFiles)for(const statement of source.statements){let name,param,node;
-      if(T.isFunctionDeclaration(statement)&&statement.name&&exported(statement)){name=statement.name.text;param=statement.parameters.length===1?statement.parameters[0]:null;node=statement.name;}
-      else if(T.isVariableStatement(statement)&&exported(statement)&&statement.declarationList.declarations.length===1){const decl=statement.declarationList.declarations[0];if(T.isIdentifier(decl.name)&&(T.isArrowFunction(decl.initializer)||T.isFunctionExpression(decl.initializer))){name=decl.name.text;param=decl.initializer.parameters.length===1?decl.initializer.parameters[0]:null;node=decl.name;}}
-      if(!name||!param||param.questionToken||param.dotDotDotToken||!param.type)continue;
-      const parameterType=checker.getTypeFromTypeNode(param.type);if(canonical(parameterType.aliasSymbol||parameterType.getSymbol?.())!==info.symbol)continue;
-      const referenceArgs=checker.getTypeArguments?.(parameterType)||[];const args=referenceArgs.length?referenceArgs:(parameterType.aliasTypeArguments||[]);if(!args.length)continue;const expression=keyExpression(args[0],param.type);if(expression)rows.push({expression,name,file:source.fileName,node,keyType:args[0],key:checker.typeToString(args[0])});
+    const generatedUri=uri(target);occurrences.push({uri:uri(info.source.fileName),range:range(info.source,info.declaration.name.getStart(info.source),info.declaration.name.getEnd()),kind:'connector',mappingName,targetUri:generatedUri,reason:null});
+    const rows=[];const baseProblem='This type acts as a mapping connector and can only be used by components and other functions with exactly one required, non-rest parameter and a named export.';
+    for(const source of sourceFiles){
+      const moduleSymbol=checker.getSymbolAtLocation(source);const moduleExports=moduleSymbol?checker.getExportsOfModule(moduleSymbol):[];
+      for(const statement of source.statements){let name,node,parameters,symbol;
+        if(T.isFunctionDeclaration(statement)){name=statement.name?.text;node=statement.name||statement;parameters=statement.parameters;symbol=statement.name&&checker.getSymbolAtLocation(statement.name);}
+        else if(T.isVariableStatement(statement)&&statement.declarationList.declarations.length===1){const decl=statement.declarationList.declarations[0];if(T.isIdentifier(decl.name)&&(T.isArrowFunction(decl.initializer)||T.isFunctionExpression(decl.initializer))){name=decl.name.text;node=decl.name;parameters=decl.initializer.parameters;symbol=checker.getSymbolAtLocation(decl.name);}}
+        else if(T.isExportAssignment(statement)&&(T.isArrowFunction(statement.expression)||T.isFunctionExpression(statement.expression))){node=statement.expression;parameters=statement.expression.parameters;}
+        if(!parameters)continue;
+        const connectorParameters=parameters.filter(param=>{if(!param.type)return false;const type=checker.getTypeFromTypeNode(param.type);return canonical(type.aliasSymbol||type.getSymbol?.())===info.symbol;});if(!connectorParameters.length)continue;
+        const targetSymbol=canonical(symbol);const exports=targetSymbol?moduleExports.filter(item=>canonical(item)===targetSymbol):[];const isDefault=T.isExportAssignment(statement)||statement.modifiers?.some(m=>m.kind===T.SyntaxKind.DefaultKeyword)||exports.some(item=>item.name==='default');const isNamed=!!name&&exports.some(item=>item.name!=='default');
+        let problem=null;if(isDefault)problem='Default exports are not supported.';else if(!isNamed)problem='The function is not a named export.';else if(parameters.length!==1)problem=`${parameters.length} parameters were found.`;else if(parameters[0].questionToken)problem='The connector parameter must be required.';else if(parameters[0].dotDotDotToken)problem='Rest parameters are not supported.';
+        const param=connectorParameters[0];const parameterType=checker.getTypeFromTypeNode(param.type);const referenceArgs=checker.getTypeArguments?.(parameterType)||[];const args=referenceArgs.length?referenceArgs:(parameterType.aliasTypeArguments||[]);const expression=args.length?keyExpression(args[0],param.type):null;if(!problem&&!expression)problem='The mapping key is not concrete or cannot be emitted.';
+        const reason=problem?`${baseProblem} ${problem}`:null;occurrences.push({uri:uri(source.fileName),range:range(source,node.getStart(source),node.getEnd()),kind:'component',mappingName,targetUri:generatedUri,reason});if(reason)addDocumentDiagnostic(source,node,reason);
+        else rows.push({expression,name,file:source.fileName,node,keyType:args[0],key:checker.typeToString(args[0])});
+      }
     }
     const duplicates=[...new Set(rows.filter((row,index)=>rows.findIndex(other=>other.key===row.key)!==index).map(row=>row.key))];if(duplicates.length){diagnostics.push({path:entry.path,message:`Duplicate mapping keys: ${duplicates.join(', ')}.`});continue;}
-    const domain=finiteDomain(info.declaration.typeParameters?.[0]);if(entry.requireAllKeys){if(!domain){diagnostics.push({path:entry.path,message:'Require all keys needs a finite literal or enum key constraint.'});continue;}const missing=domain.filter(key=>!rows.some(row=>row.expression===key));if(missing.length){diagnostics.push({path:entry.path,message:`Missing mapping keys: ${missing.join(', ')}.`});continue;}}
+    const domain=finiteDomain(info.declaration.typeParameters?.[0]);const exhaustive=entry.requireAllKeys===true&&domain!==null;
     const imports=new Map(),used=new Map([[mappingName,'mapping']]);
     const addImport=(file,name)=>{const spec=moduleSpecifier(target,file);const names=imports.get(spec)||new Map();if(names.has(name))return names.get(name);let local=name,index=2;while(used.has(local)&&used.get(local)!==`${spec}\0${name}`)local=`${name}_${index++}`;used.set(local,`${spec}\0${name}`);names.set(name,local);imports.set(spec,names);return local;};
     rows.sort((a,b)=>a.expression.localeCompare(b.expression)||a.file.localeCompare(b.file)||a.name.localeCompare(b.name));for(const row of rows)row.localName=addImport(row.file,row.name);
     for(const row of rows){const first=row.expression.split('.')[0];if(first!==row.expression){const member=row.keyType.getSymbol?.();const symbol=canonical(member?.parent||checker.resolveName(first,row.node,T.SymbolFlags.Value,false));const declaration=symbol?.declarations?.[0];if(declaration){const exported=symbol.name||first;const local=addImport(declaration.getSourceFile().fileName,exported);row.expression=local+row.expression.slice(first.length);}}else if(row.keyType.flags&T.TypeFlags.UniqueESSymbol){const symbol=canonical(row.keyType.getSymbol?.());const declaration=symbol?.declarations?.[0];if(declaration)row.expression=addImport(declaration.getSourceFile().fileName,symbol.name);}}
+    let domainText=validation.keyDomainType;if(exhaustive&&info.declaration.typeParameters?.[0]?.constraint){const constraint=info.declaration.typeParameters[0].constraint;const original=constraint.getText(info.source),replacements=[];const visitDomain=node=>{if(T.isIdentifier(node)){const symbol=canonical(checker.getSymbolAtLocation(node));const declaration=symbol?.declarations?.find(item=>!item.getSourceFile().isDeclarationFile);if(declaration&&symbol?.name&&symbol.name!=='__type'){const local=addImport(declaration.getSourceFile().fileName,symbol.name);replacements.push({start:node.getStart(info.source)-constraint.getStart(info.source),end:node.getEnd()-constraint.getStart(info.source),text:local});}}T.forEachChild(node,visitDomain);};visitDomain(constraint);domainText=original;for(const replacement of replacements.sort((a,b)=>b.start-a.start))domainText=domainText.slice(0,replacement.start)+replacement.text+domainText.slice(replacement.end);}
     const importText=[...imports.entries()].sort(([a],[b])=>a.localeCompare(b)).map(([spec,names])=>{const list=[...names.entries()].sort(([a],[b])=>a.localeCompare(b)).map(([name,local])=>name===local?name:`${name} as ${local}`);return list.length===1?`import { ${list[0]} } from ${JSON.stringify(spec)};`:`import {\n${list.map(name=>`  ${name},`).join('\n')}\n} from ${JSON.stringify(spec)};`;}).join('\n');
-    const body=rows.map(row=>`  [${row.expression}]: ${row.localName},`).join('\n');plans.push({path:path.relative(root,target).replace(/\\/g,'/'),content:`${importText}${importText?'\n\n':''}export const ${mappingName} = {\n${body}${body?'\n':''}} as const;\n`});
+    const header='//----------------------\n// <auto-generated>\n//     Generated using the TypeBreeze IDE plugin.\n//     Can be adjusted manually, but only if you don\'t have the plugin installed.\n// </auto-generated>\n//----------------------';
+    const body=rows.map(row=>`  [${row.expression}]: ${row.localName},`).join('\n');const satisfies=exhaustive?` satisfies Record<${domainText}, unknown>`:'';plans.push({path:path.relative(root,target).replace(/\\/g,'/'),content:`${header}\n\n${importText}${importText?'\n\n':''}export const ${mappingName} = {\n${body}${body?'\n':''}} as const${satisfies};\n`});
   }
-  return {files:plans,diagnostics};
+  return {files:plans,diagnostics,occurrences,diagnosticDocuments:[...documentDiagnostics].map(([uri,diagnostics])=>({uri,diagnostics}))};
 }
 async function handle(message) {
   if (message.method === 'extensionCompletions') {

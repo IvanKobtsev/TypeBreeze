@@ -126,8 +126,15 @@ The first generic parameter must use the configured name (by default `TKey`),
 have a `PropertyKey`-compatible constraint, and produce an object type. Exported
 named functions with exactly one required parameter contribute entries when that
 parameter instantiates the configured type. The concrete first type argument is
-used as the mapping key. Optional exhaustive checking reports missing or duplicate
-keys while preserving the last valid generated file.
+used as the mapping key. Optional exhaustive checking emits a
+`satisfies Record<KeyDomain, unknown>` constraint so ordinary TypeScript
+typechecking reports missing keys. Duplicate keys and invalid connector usages
+are reported directly by TypeBreeze.
+
+Configured connector types and their mapped functions receive gutter markers
+that navigate to the generated file. Functions using a connector must be named
+exports with exactly one required, non-rest parameter; default exports and other
+invalid shapes are highlighted as errors.
 
 Generated imports prefer aliases from the active TypeScript project's `paths`,
 then `baseUrl`, and fall back to relative imports. Generation runs when the
