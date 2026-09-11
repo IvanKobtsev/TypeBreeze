@@ -4,7 +4,6 @@ import com.intellij.lang.annotation.Annotator
 import com.intellij.lang.annotation.AnnotationHolder
 import com.intellij.lang.annotation.HighlightSeverity
 import com.intellij.lang.javascript.psi.JSFunction
-import com.intellij.lang.javascript.psi.JSParameter
 import com.intellij.openapi.util.TextRange
 import com.intellij.psi.PsiComment
 import com.intellij.psi.PsiElement
@@ -93,7 +92,7 @@ internal object OverloadDiffAnalyzer {
 
         parameterList.parameters.forEachIndexed { index, parameter -> addParameter(components, index, parameter) }
 
-        val suffixEnd = function.body?.textRange?.startOffset ?: function.textRange.endOffset
+        val suffixEnd = function.block?.textRange?.startOffset ?: function.textRange.endOffset
         val suffix = TextRange(parameterList.textRange.endOffset, suffixEnd)
         val suffixText = function.containingFile.text.substring(suffix.startOffset, suffix.endOffset)
             .trimEnd().removeSuffix(";").trimEnd()
@@ -107,7 +106,7 @@ internal object OverloadDiffAnalyzer {
         return Signature(function, components)
     }
 
-    private fun addParameter(components: MutableMap<String, Component>, index: Int, parameter: JSParameter) {
+    private fun addParameter(components: MutableMap<String, Component>, index: Int, parameter: PsiElement) {
         val text = parameter.text
         val absolute = parameter.textRange.startOffset
         val colon = topLevelColon(text)
@@ -223,5 +222,5 @@ internal object OverloadDiffAnalyzer {
         return offset
     }
 
-    private fun hasBody(function: JSFunction): Boolean = function.body != null
+    private fun hasBody(function: JSFunction): Boolean = function.block != null
 }
