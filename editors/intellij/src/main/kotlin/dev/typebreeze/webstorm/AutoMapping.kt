@@ -130,13 +130,17 @@ class MappingOccurrenceCache(private val project:Project) {
     private val entries=java.util.concurrent.ConcurrentHashMap<String,List<MappingOccurrence>>()
     fun replace(occurrences:List<MappingOccurrence>){val affected=entries.keys.toSet()+occurrences.map{it.uri};entries.clear();occurrences.groupBy{it.uri}.forEach{(uri,items)->entries[uri]=items};for(uri in affected)VirtualFileManager.getInstance().findFileByUrl(uri)?.let{com.intellij.psi.PsiManager.getInstance(project).findFile(it)}?.let{com.intellij.codeInsight.daemon.DaemonCodeAnalyzer.getInstance(project).restart(it)}}
     fun matching(file:VirtualFile,element:com.intellij.psi.PsiElement):MappingOccurrence? {
+        if(element.firstChild!=null)return null
         val document=FileDocumentManager.getInstance().getDocument(file)?:return null
         return entries[file.url]?.firstOrNull { occurrence ->
             if(occurrence.range.start.line !in 0 until document.lineCount||occurrence.range.end.line !in 0 until document.lineCount){if(element===element.containingFile&&LOG.isDebugEnabled)LOG.debug("Unmatched mapping occurrence ${occurrence.uri}:${occurrence.range}; invalid document line range") ;return@firstOrNull false}
             val wanted=com.intellij.openapi.util.TextRange(document.getLineStartOffset(occurrence.range.start.line)+occurrence.range.start.character,document.getLineStartOffset(occurrence.range.end.line)+occurrence.range.end.character)
-            if(!element.textRange.contains(wanted)){if(element===element.containingFile&&LOG.isDebugEnabled){val nearby=element.containingFile.findElementAt(wanted.startOffset.coerceIn(0,document.textLength.coerceAtLeast(1)-1));LOG.debug("Unmatched mapping occurrence ${occurrence.uri}:${occurrence.range}; nearby PSI ${nearby?.javaClass?.name}")} ;return@firstOrNull false}
-            val childContains=element.children.any{it.textRange.contains(wanted)}
-            if(!childContains)true else false
+            val startOffset=wanted.startOffset.coerceIn(0,document.textLength.coerceAtLeast(1)-1)
+            val anchor=element.containingFile.findElementAt(startOffset)?:return@firstOrNull false
+            var containing:com.intellij.psi.PsiElement?=anchor
+            while(containing!=null&&!containing.textRange.contains(wanted))containing=containing.parent
+            if(containing==null){if(LOG.isDebugEnabled)LOG.debug("Unmatched mapping occurrence ${occurrence.uri}:${occurrence.range}; nearby PSI ${anchor.javaClass.name}");return@firstOrNull false}
+            element===anchor
         }
     }
     fun navigate(source:VirtualFile,occurrence:MappingOccurrence){val manager=VirtualFileManager.getInstance();manager.findFileByUrl(occurrence.targetUri)?.let{FileEditorManager.getInstance(project).openFile(it,true);return};project.getService(MappingGenerationService::class.java).regenerate(source);openWhenReady(occurrence.targetUri,0)}
