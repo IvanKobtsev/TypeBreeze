@@ -223,7 +223,21 @@ function mappingTypeAt(params) {
   return {valid:!reason,reason,typeName:declaration.name.text,path:path.relative(root,file).replace(/\\/g,'/'),finiteKeyDomain:domain.finite,keyDomainType:domain.typeText};
 }
 
-function mappingGeneration() {
+async function formatMappingPlans(plans) {
+  let prettier;
+  try { prettier=require(require.resolve('prettier',{paths:[root]})); } catch { return plans; }
+  try { await prettier.clearConfigCache?.(); } catch {}
+  return Promise.all(plans.map(async plan=>{
+    const filePath=path.resolve(root,plan.path);
+    try {
+      const options=await prettier.resolveConfig?.(filePath) || {};
+      const content=await prettier.format(plan.content,{...options,filepath:filePath,parser:options.parser||'typescript'});
+      return {...plan,content};
+    } catch { return plan; }
+  }));
+}
+
+async function mappingGeneration() {
   const T=loadTypeScript(); const configPath=path.join(root,'mappings.brz.json'); const diagnostics=[],occurrences=[],documentDiagnostics=new Map();
   const addDocumentDiagnostic=(source,node,message)=>{const fileUri=uri(source.fileName);const list=documentDiagnostics.get(fileUri)||[];list.push({range:range(source,node.getStart(source),node.getEnd()),severity:1,source:'TypeBreeze',message});documentDiagnostics.set(fileUri,list);};
   let config; try{config=JSON.parse(fs.readFileSync(configPath,'utf8'));}catch(error){return{files:[],diagnostics:[{path:'mappings.brz.json',message:`Cannot read mappings.brz.json: ${error.message}`} ]};}
@@ -293,7 +307,7 @@ function mappingGeneration() {
     const finalImportText=[...imports.entries()].sort(([a],[b])=>a.localeCompare(b)).map(([spec,names])=>{const list=[...names.entries()].sort(([a],[b])=>a.localeCompare(b)).map(([name,local])=>name===local?name:`${name} as ${local}`);return list.length===1?`import { ${list[0]} } from ${JSON.stringify(spec)};`:`import {\n${list.map(name=>`  ${name},`).join('\n')}\n} from ${JSON.stringify(spec)};`;}).join('\n');
     plans.push({path:path.relative(root,target).replace(/\\/g,'/'),content:`${header}\n\n${finalImportText}${finalImportText?'\n\n':''}export const ${mappingName} = {\n${body}${body?'\n':''}} as const${satisfies};\n`});
   }
-  return {files:plans,diagnostics,occurrences,diagnosticDocuments:[...documentDiagnostics].map(([uri,diagnostics])=>({uri,diagnostics}))};
+  return {files:await formatMappingPlans(plans),diagnostics,occurrences,diagnosticDocuments:[...documentDiagnostics].map(([uri,diagnostics])=>({uri,diagnostics}))};
 }
 async function handle(message) {
   if (message.method === 'extensionCompletions') {

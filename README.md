@@ -145,6 +145,10 @@ invalid shapes are highlighted as errors.
 Generated imports prefer aliases from the active TypeScript project's `paths`,
 then `baseUrl`, and fall back to relative imports. Generation runs when the
 project opens and after relevant configuration or TypeScript filesystem changes.
+When the workspace provides Prettier, generated maps are formatted with the
+configuration resolved for each output file before TypeBreeze compares or writes
+their contents. Projects without Prettier use TypeBreeze's deterministic built-in
+formatting.
 
 ## Asset-import auto-generation
 

@@ -98,8 +98,9 @@ class MappingGenerationService(private val project:Project):Disposable {
     private val generation=AtomicLong()
     @Volatile private var anchor:VirtualFile?=null
     init {
-        project.messageBus.connect(this).subscribe(VirtualFileManager.VFS_CHANGES,object:BulkFileListener{override fun after(events:List<VFileEvent>){events.asSequence().mapNotNull{it.file}.firstOrNull{it.name=="mappings.brz.json"||TypeBreezeLspProvider.supports(it)}?.let(::schedule)}})
+        project.messageBus.connect(this).subscribe(VirtualFileManager.VFS_CHANGES,object:BulkFileListener{override fun after(events:List<VFileEvent>){events.asSequence().mapNotNull{it.file}.firstOrNull{isMappingInput(it)}?.let(::schedule)}})
     }
+    private fun isMappingInput(file:VirtualFile)=TypeBreezeLspProvider.supports(file)||file.name=="mappings.brz.json"||file.name=="package.json"||file.name.startsWith(".prettierrc")||file.name.startsWith("prettier.config.")
     fun schedule(file:VirtualFile){if(TypeBreezeLspProvider.supports(file))anchor=file;val token=generation.incrementAndGet();AppExecutorUtil.getAppScheduledExecutorService().schedule({if(generation.get()==token)regenerate(file,0,token)},250,TimeUnit.MILLISECONDS)}
     fun regenerate(file:VirtualFile){val token=generation.incrementAndGet();regenerate(file,0,token)}
     private fun regenerate(file:VirtualFile,attempt:Int,token:Long){
