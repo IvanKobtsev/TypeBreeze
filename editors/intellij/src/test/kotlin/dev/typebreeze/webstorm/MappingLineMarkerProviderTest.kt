@@ -13,9 +13,10 @@ class MappingLineMarkerProviderTest : BasePlatformTestCase() {
         val document=myFixture.editor.document
         fun occurrence(name:String,kind:String):MappingOccurrence {
             val start=document.text.indexOf(name)
-            val startPoint=document.offsetToLogicalPosition(start)
-            val endPoint=document.offsetToLogicalPosition(start+name.length)
-            return MappingOccurrence(file.virtualFile.url,Range(Position(startPoint.line,startPoint.column),Position(endPoint.line,endPoint.column)),kind,"Components","file:///generated/Connector.map.ts")
+            val end=start+name.length
+            val startLine=document.getLineNumber(start)
+            val endLine=document.getLineNumber(end)
+            return MappingOccurrence(file.virtualFile.url,Range(Position(startLine,start-document.getLineStartOffset(startLine)),Position(endLine,end-document.getLineStartOffset(endLine))),kind,"Components","file:///generated/Connector.map.ts")
         }
         project.getService(MappingOccurrenceCache::class.java).replace(listOf(occurrence("Connector","connector"),occurrence("Component","component")))
         val provider=MappingLineMarkerProvider()
