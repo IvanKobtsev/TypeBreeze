@@ -2,11 +2,23 @@ package dev.typebreeze.webstorm
 
 import com.intellij.lang.annotation.Annotator
 import com.intellij.lang.annotation.AnnotationHolder
-import com.intellij.lang.annotation.HighlightSeverity
 import com.intellij.lang.javascript.psi.JSFunction
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.components.Service
+import com.intellij.openapi.editor.Document
+import com.intellij.openapi.editor.EditorFactory
+import com.intellij.openapi.editor.event.DocumentEvent
+import com.intellij.openapi.editor.event.DocumentListener
 import com.intellij.openapi.editor.colors.EditorColorsManager
+import com.intellij.openapi.editor.impl.DocumentMarkupModel
+import com.intellij.openapi.editor.markup.HighlighterLayer
+import com.intellij.openapi.editor.markup.HighlighterTargetArea
+import com.intellij.openapi.editor.markup.RangeHighlighter
 import com.intellij.openapi.editor.markup.TextAttributes
+import com.intellij.openapi.fileEditor.FileDocumentManager
+import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.TextRange
+import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiComment
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiErrorElement
@@ -18,18 +30,54 @@ import com.intellij.psi.util.PsiTreeUtil
 
 class OverloadDiffAnnotator : Annotator {
     override fun annotate(element: PsiElement, holder: AnnotationHolder) {
-        if (element !is PsiFile || !TypeBreezeSettings.instance.state.fadeRepeatedOverloadSyntax) return
-        // TypeScript semantic highlighting is applied after ordinary text-attribute keys and
-        // otherwise restores keyword/type colors inside our ranges. Resolve the user's configured
-        // TypeBreeze style, then enforce it so every token in a repeated component is consistently faded.
+        if (element !is PsiFile) return
         val fadedAttributes = EditorColorsManager.getInstance().globalScheme
             .getAttributes(TypeBreezeColors.REPEATED_OVERLOAD) ?: TextAttributes()
-        OverloadDiffAnalyzer.ranges(element).forEach {
-            holder.newSilentAnnotation(HighlightSeverity.INFORMATION)
-                .range(it)
-                .enforcedTextAttributes(fadedAttributes)
-                .create()
+        val ranges = if (TypeBreezeSettings.instance.state.fadeRepeatedOverloadSyntax) {
+            OverloadDiffAnalyzer.ranges(element)
+        } else emptyList()
+        element.project.getService(OverloadFadeHighlighters::class.java)
+            .replace(element.virtualFile ?: return, ranges, fadedAttributes)
+    }
+}
+
+@Service(Service.Level.PROJECT)
+class OverloadFadeHighlighters(private val project: Project) {
+    private data class Applied(val stamp: Long, val ranges: List<TextRange>, val highlighters: List<RangeHighlighter>)
+    private val applied = mutableMapOf<Document, Applied>()
+
+    init {
+        EditorFactory.getInstance().eventMulticaster.addDocumentListener(object : DocumentListener {
+            override fun documentChanged(event: DocumentEvent) {
+                ApplicationManager.getApplication().invokeLater { clear(event.document) }
+            }
+        }, project)
+    }
+
+    fun replace(file: VirtualFile, ranges: List<TextRange>, attributes: TextAttributes) {
+        val document = FileDocumentManager.getInstance().getDocument(file) ?: return
+        val stamp = document.modificationStamp
+        ApplicationManager.getApplication().invokeLater {
+            if (project.isDisposed || document.modificationStamp != stamp) return@invokeLater
+            val previous = applied[document]
+            if (previous?.stamp == stamp && previous.ranges == ranges) return@invokeLater
+            previous?.highlighters?.forEach(RangeHighlighter::dispose)
+            val markup = DocumentMarkupModel.forDocument(document, project, true)
+            val highlighters = ranges.map { range ->
+                markup.addRangeHighlighter(
+                    range.startOffset,
+                    range.endOffset,
+                    HighlighterLayer.ERROR - 1,
+                    attributes,
+                    HighlighterTargetArea.EXACT_RANGE,
+                )
+            }
+            applied[document] = Applied(stamp, ranges, highlighters)
         }
+    }
+
+    private fun clear(document: Document) {
+        applied.remove(document)?.highlighters?.forEach(RangeHighlighter::dispose)
     }
 }
 
@@ -90,8 +138,8 @@ internal object OverloadDiffAnalyzer {
         components["name"] = component("name", name.textRange, name.text)
 
         val prefix = TextRange(function.textRange.startOffset, name.textRange.startOffset)
-        addIfMeaningful(components, "modifiers", prefix, function.containingFile.text.substring(prefix.startOffset, prefix.endOffset)
-            .replace(Regex("\\bfunction\\b"), ""))
+        addIfMeaningful(components, "modifiers", prefix,
+            function.containingFile.text.substring(prefix.startOffset, prefix.endOffset))
 
         val typeParameters = TextRange(name.textRange.endOffset, parameterList.textRange.startOffset)
         addIfMeaningful(components, "typeParameters", typeParameters,

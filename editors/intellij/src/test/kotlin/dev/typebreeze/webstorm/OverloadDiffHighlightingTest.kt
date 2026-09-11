@@ -5,15 +5,16 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
 class OverloadDiffHighlightingTest : BasePlatformTestCase() {
     fun testFadesOnlyComponentsSharedAcrossWholeFunctionGroup() {
         val text = """
-            function callMethod(key: Key, props: Props): Result;
-            function callMethod(key: Key | null, props: Props): Result | null;
-            function callMethod(key: Key | undefined, props: Props): Result | undefined;
-            function callMethod(key: Key | null | undefined, props: Props): Result | null | undefined { throw Error(); }
+            export function callMethod(key: Key, props: Props): Result;
+            export function callMethod(key: Key | null, props: Props): Result | null;
+            export function callMethod(key: Key | undefined, props: Props): Result | undefined;
+            export function callMethod(key: Key | null | undefined, props: Props): Result | null | undefined { throw Error(); }
         """.trimIndent()
         val file = myFixture.configureByText("overloads.ts", text)
 
         val faded = OverloadDiffAnalyzer.ranges(file).map { text.substring(it.startOffset, it.endOffset).trim() }
 
+        assertEquals(3, faded.count { it == "export function" })
         assertEquals(3, faded.count { it == "callMethod" })
         assertEquals(3, faded.count { it == "key" })
         assertEquals(3, faded.count { it == "props" })
