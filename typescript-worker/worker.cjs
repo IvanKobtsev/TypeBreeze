@@ -8,6 +8,8 @@ const overlays = new Map();
 let ts;
 let languageService;
 let extensionService;
+let keyDomainProgram;
+let keyDomainCache = new WeakMap();
 
 function loadTypeScript() {
   if (ts) return ts;
@@ -74,17 +76,18 @@ function typeAliasForFiniteType(T,checker,type){if(!finiteParts(T,type).valid)re
 function contextualKeyDomain(T,checker,program,node){
   if(!isStaticPropertyName(T,node))return null;
   const object=node.parent.parent;let objectType=checker.getContextualType(object);if(!objectType)return null;
+  if(objectType.isUnion()){const objects=objectType.types.filter(type=>!(type.flags&(T.TypeFlags.Undefined|T.TypeFlags.Null)));if(objects.length!==1)return null;objectType=objects[0];}
   if(objectType.flags&T.TypeFlags.TypeParameter)objectType=checker.getBaseConstraintOfType(objectType);if(!objectType)return null;
+  if(keyDomainProgram!==program){keyDomainProgram=program;keyDomainCache=new WeakMap();}
+  if(keyDomainCache.has(objectType)){const cached=keyDomainCache.get(objectType);return cached?.values.has(node.text)?cached:null;}
   if(checker.getIndexTypeOfType(objectType,T.IndexKind.String))return null;
   const values=checker.getPropertiesOfType(objectType).map(property=>property.name).filter(name=>name!=='__proto__');
-  if(values.length<2||values.length>100||new Set(values).size!==values.length||!values.includes(node.text))return null;
-  const candidates=[];const add=type=>{const parts=finiteParts(T,type);if(parts.valid&&parts.strings.length===values.length&&parts.strings.every(part=>values.includes(part.value)))candidates.push(type);};
-  for(const argument of objectType.aliasTypeArguments||[])add(argument);
-  for(const declaration of objectType.aliasSymbol?.declarations||[]){const visit=child=>{if(T.isMappedTypeNode(child)&&child.typeParameter.constraint)add(checker.getTypeFromTypeNode(child.typeParameter.constraint));T.forEachChild(child,visit);};visit(declaration);}
-  if(!candidates.length&&(objectType.objectFlags&T.ObjectFlags.Mapped)){for(const source of program.getSourceFiles())for(const statement of source.statements)if(T.isTypeAliasDeclaration(statement))add(checker.getTypeFromTypeNode(statement.type));}
+  if(values.length<2||values.length>100||new Set(values).size!==values.length){keyDomainCache.set(objectType,null);return null;}
+  const candidates=[],seenTypes=new Set();const inspect=type=>{if(!type||seenTypes.has(type))return;seenTypes.add(type);const parts=finiteParts(T,type);if(parts.valid&&parts.strings.length===values.length&&parts.strings.every(part=>values.includes(part.value)))candidates.push(type);for(const argument of type.aliasTypeArguments||[])inspect(argument);if(type.isIntersectionOrUnion?.())for(const part of type.types)inspect(part);for(const declaration of type.aliasSymbol?.declarations||[]){const visit=child=>{if(T.isMappedTypeNode(child)&&child.typeParameter.constraint)inspect(checker.getTypeFromTypeNode(child.typeParameter.constraint));T.forEachChild(child,visit);};visit(declaration);}};
+  inspect(objectType);
   const unique=[];for(const candidate of candidates){const alias=typeAliasForFiniteType(T,checker,candidate);if(alias&&!unique.includes(alias))unique.push(alias);}
-  if(unique.length!==1)return null;
-  const alias=unique[0],type=checker.getDeclaredTypeOfSymbol(alias);return finiteParts(T,type).valid?{type,alias}:null;
+  if(unique.length!==1){keyDomainCache.set(objectType,null);return null;}
+  const alias=unique[0],type=checker.getDeclaredTypeOfSymbol(alias),result=finiteParts(T,type).valid?{type,alias,values:new Set(values)}:null;keyDomainCache.set(objectType,result);return result?.values.has(node.text)?result:null;
 }
 function contextualTypeForLiteral(T,checker,node){
   let contextual=checker.getContextualType(node);if(finiteParts(T,contextual).valid)return contextual;

@@ -28,6 +28,12 @@ class TypeBreezeSettingsTest:BasePlatformTestCase() {
         assertFalse(text.any{it.contains("Extension methods")||it.contains("Style union member")||it.contains("Style contextual")})
     }
 
+    fun testUnionAnnotatorSupportsTsAndTsx() {
+        val pluginXml=java.io.File("src/main/resources/META-INF/plugin.xml").readText()
+        assertTrue(pluginXml.contains("<annotator language=\"TypeScript\" implementationClass=\"dev.typebreeze.webstorm.TypeBreezeAnnotator\"/>"))
+        assertTrue(pluginXml.contains("<annotator language=\"TypeScript JSX\" implementationClass=\"dev.typebreeze.webstorm.TypeBreezeAnnotator\"/>"))
+    }
+
     private fun allText(container:Container):List<String> = container.components.flatMap { component ->
         val own=when(component){is JLabel->listOf(component.text);is AbstractButton->listOf(component.text);else->emptyList()}
         own+(component as? Container)?.let(::allText).orEmpty()

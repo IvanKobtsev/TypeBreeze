@@ -15,6 +15,7 @@
     <platform.backend.documentation.targetProvider implementation="dev.typebreeze.webstorm.UnionDocumentationTargetProvider" order="first"/>
     <renameHandler implementation="dev.typebreeze.webstorm.TypeBreezeRenameHandler"/>
     <annotator language="TypeScript" implementationClass="dev.typebreeze.webstorm.TypeBreezeAnnotator"/>
+    <annotator language="TypeScript JSX" implementationClass="dev.typebreeze.webstorm.TypeBreezeAnnotator"/>
     <annotator language="TypeScript" implementationClass="dev.typebreeze.webstorm.ExtensionMethodAnnotator"/>
     <annotator language="TypeScript" implementationClass="dev.typebreeze.webstorm.OverloadDiffAnnotator"/>
     <annotator language="TypeScript JSX" implementationClass="dev.typebreeze.webstorm.OverloadDiffAnnotator"/>

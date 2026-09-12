@@ -41,6 +41,9 @@ const checked = { TestCase: 1, TestPoint: 2 } satisfies DomainMap;
 const readonly: Readonly<Record<DomainType, number>> = { TestCase: 1, TestPoint: 2 };
 declare function accept(value: DomainMap): void;
 accept({ TestCase: 1, TestPoint: 2 });
+interface Options { extraConditions?: DomainMap }
+declare function useOptions(options?: Options): void;
+useOptions({ extraConditions: { TestCase: 1, TestPoint: 2 } });
 const ordinary: { TestCase: number; TestPoint: number } = { TestCase: 1, TestPoint: 2 };
 const indexed: { [key: string]: number } = { TestCase: 1, TestPoint: 2 };
 const TestCase = 1; const shorthand: DomainMap = { TestCase, TestPoint: 2 };
@@ -64,12 +67,12 @@ function request(method, params) { return new Promise((resolve, reject) => { con
     assert.deepEqual(member.assignableMembers.map(item => item.value), ['TestCase', 'TestPoint']);
   }
   const domainLocations = await request('navigationTargets', { textDocument: { uri: pathToFileURL(domainPath).href }, position: { line: 0, character: 28 } });
-  assert.equal(domainLocations.length, 6);
+  assert.equal(domainLocations.length, 7);
   const domainDeclarations = await request('documentUnions', { textDocument: { uri: pathToFileURL(domainPath).href } });
-  assert.equal(domainDeclarations.literals.find(item => item.currentValue === 'TestCase').usageLocations.length, 6);
-  assert.equal(domainDeclarations.literals.find(item => item.currentValue === 'TestPoint').usageLocations.length, 5);
+  assert.equal(domainDeclarations.literals.find(item => item.currentValue === 'TestCase').usageLocations.length, 7);
+  assert.equal(domainDeclarations.literals.find(item => item.currentValue === 'TestPoint').usageLocations.length, 6);
   const mappingDocument = await request('documentUnions', { textDocument: { uri: pathToFileURL(mappingUsagePath).href }, includeUsages: false });
-  assert.equal(mappingDocument.literals.length, 9);
+  assert.equal(mappingDocument.literals.length, 11);
   assert(mappingDocument.literals.every(item => item.kind === 'usage' && item.contextualTypeName === 'DomainType'));
   const mappingKey = await request('resolveLiteral', { textDocument: { uri: pathToFileURL(mappingUsagePath).href }, position: { line: 2, character: 55 } });
   assert.equal(mappingKey.currentValue, 'TestCase');
