@@ -20,6 +20,8 @@
     <annotator language="TypeScript JSX" implementationClass="dev.typebreeze.webstorm.OverloadDiffAnnotator"/>
     <codeInsight.lineMarkerProvider language="TypeScript" implementationClass="dev.typebreeze.webstorm.MappingLineMarkerProvider"/>
     <codeInsight.lineMarkerProvider language="TypeScript JSX" implementationClass="dev.typebreeze.webstorm.MappingLineMarkerProvider"/>
+    <codeInsight.lineMarkerProvider language="TypeScript" implementationClass="dev.typebreeze.webstorm.OverloadDiffLineMarkerProvider"/>
+    <codeInsight.lineMarkerProvider language="TypeScript JSX" implementationClass="dev.typebreeze.webstorm.OverloadDiffLineMarkerProvider"/>
     <codeInsight.lineMarkerProvider language="JavaScript" implementationClass="dev.typebreeze.webstorm.MappingLineMarkerProvider"/>
     <codeInsight.lineMarkerProvider language="JavaScript JSX" implementationClass="dev.typebreeze.webstorm.MappingLineMarkerProvider"/>
     <colorSettingsPage implementation="dev.typebreeze.webstorm.TypeBreezeColorSettingsPage"/>

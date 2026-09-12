@@ -1,5 +1,7 @@
 package dev.typebreeze.webstorm
 
+import com.intellij.lang.javascript.psi.JSFunction
+import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 
 class OverloadDiffHighlightingTest : BasePlatformTestCase() {
@@ -63,6 +65,32 @@ class OverloadDiffHighlightingTest : BasePlatformTestCase() {
         assertEquals(2, faded.count { it == "get" })
         assertEquals(2, faded.count { it == "key" })
         assertFalse(faded.any { it.startsWith("Key") || it.startsWith("Value") })
+    }
+
+    fun testGroupVisibilityCanBeToggledWithoutChangingSource() {
+        val text = "function find(key: Key): Value;\nfunction find(key: Key | null): Value | null;"
+        val file = myFixture.configureByText("toggle.ts", text)
+        val group = OverloadDiffAnalyzer.groups(file).single()
+        val visibility = project.getService(OverloadDiffVisibility::class.java)
+
+        assertFalse(visibility.isSuppressed(file.virtualFile, group.anchor))
+        visibility.toggle(file.virtualFile, group.anchor)
+        assertTrue(visibility.isSuppressed(file.virtualFile, group.anchor))
+        assertEquals(text, file.text)
+        visibility.toggle(file.virtualFile, group.anchor)
+        assertFalse(visibility.isSuppressed(file.virtualFile, group.anchor))
+    }
+
+    fun testGutterMarkerAppearsOnlyOnFirstOverload() {
+        val file = myFixture.configureByText(
+            "marker.ts",
+            "function find(key: Key): Value;\nfunction find(key: Key | null): Value | null;",
+        )
+        val functions = PsiTreeUtil.findChildrenOfType(file, JSFunction::class.java).toList()
+        val provider = OverloadDiffLineMarkerProvider()
+
+        assertNotNull(provider.getLineMarkerInfo(functions[0]))
+        assertNull(provider.getLineMarkerInfo(functions[1]))
     }
 
     fun testIdenticalOrBoilerplateOnlyOverloadsAreNotFaded() {

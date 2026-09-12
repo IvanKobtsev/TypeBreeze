@@ -161,7 +161,9 @@ and comments, and never fades an implementation signature or changes source code
 
 The feature is enabled by default under **Settings | TypeBreeze | Fade repeated
 overload syntax**. Its appearance is independently configurable under **Editor |
-Color Scheme | TypeBreeze | Repeated overload syntax**.
+Color Scheme | TypeBreeze | Repeated overload syntax**. Use the visibility icon
+beside the first signature to switch one overload group between diff highlighting
+and ordinary code for the current project session.
 
 ## Asset-import auto-generation
 

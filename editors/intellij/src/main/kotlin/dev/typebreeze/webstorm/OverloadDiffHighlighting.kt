@@ -3,10 +3,16 @@ package dev.typebreeze.webstorm
 import com.intellij.lang.annotation.Annotator
 import com.intellij.lang.annotation.AnnotationHolder
 import com.intellij.lang.javascript.psi.JSFunction
+import com.intellij.codeInsight.daemon.DaemonCodeAnalyzer
+import com.intellij.codeInsight.daemon.GutterIconNavigationHandler
+import com.intellij.codeInsight.daemon.LineMarkerInfo
+import com.intellij.codeInsight.daemon.LineMarkerProvider
+import com.intellij.icons.AllIcons
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.editor.Document
 import com.intellij.openapi.editor.EditorFactory
+import com.intellij.openapi.editor.RangeMarker
 import com.intellij.openapi.editor.event.DocumentEvent
 import com.intellij.openapi.editor.event.DocumentListener
 import com.intellij.openapi.editor.colors.EditorColorsManager
@@ -17,6 +23,7 @@ import com.intellij.openapi.editor.markup.RangeHighlighter
 import com.intellij.openapi.editor.markup.TextAttributes
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.editor.markup.GutterIconRenderer
 import com.intellij.openapi.util.TextRange
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiComment
@@ -34,10 +41,66 @@ class OverloadDiffAnnotator : Annotator {
         val fadedAttributes = EditorColorsManager.getInstance().globalScheme
             .getAttributes(TypeBreezeColors.REPEATED_OVERLOAD) ?: TextAttributes()
         val ranges = if (TypeBreezeSettings.instance.state.fadeRepeatedOverloadSyntax) {
-            OverloadDiffAnalyzer.ranges(element)
+            val visibility = element.project.getService(OverloadDiffVisibility::class.java)
+            OverloadDiffAnalyzer.groups(element)
+                .filterNot { visibility.isSuppressed(element.virtualFile ?: return, it.anchor) }
+                .flatMap { it.ranges }
         } else emptyList()
         element.project.getService(OverloadFadeHighlighters::class.java)
             .replace(element.virtualFile ?: return, ranges, fadedAttributes)
+    }
+}
+
+@Service(Service.Level.PROJECT)
+class OverloadDiffVisibility {
+    private val suppressed = mutableMapOf<Document, MutableList<RangeMarker>>()
+
+    @Synchronized
+    fun isSuppressed(file: VirtualFile, anchor: TextRange): Boolean {
+        val document = FileDocumentManager.getInstance().getDocument(file) ?: return false
+        return suppressed[document]
+            ?.also { it.removeAll { marker -> !marker.isValid } }
+            ?.any { it.startOffset == anchor.startOffset } == true
+    }
+
+    @Synchronized
+    fun toggle(file: VirtualFile, anchor: TextRange) {
+        val document = FileDocumentManager.getInstance().getDocument(file) ?: return
+        val markers = suppressed.getOrPut(document) { mutableListOf() }
+        val existing = markers.firstOrNull { it.isValid && it.startOffset == anchor.startOffset }
+        if (existing != null) {
+            existing.dispose()
+            markers.remove(existing)
+            if (markers.isEmpty()) suppressed.remove(document)
+        } else {
+            markers += document.createRangeMarker(anchor.startOffset, anchor.endOffset)
+        }
+    }
+}
+
+class OverloadDiffLineMarkerProvider : LineMarkerProvider {
+    override fun getLineMarkerInfo(element: PsiElement): LineMarkerInfo<*>? {
+        if (!TypeBreezeSettings.instance.state.fadeRepeatedOverloadSyntax) return null
+        val function = element as? JSFunction ?: return null
+        val name = function.nameIdentifier ?: return null
+        val file = function.containingFile
+        val virtualFile = file.virtualFile ?: return null
+        val group = OverloadDiffAnalyzer.groups(file).firstOrNull { it.anchor == name.textRange } ?: return null
+        val visibility = function.project.getService(OverloadDiffVisibility::class.java)
+        val suppressed = visibility.isSuppressed(virtualFile, group.anchor)
+        val tooltip = if (suppressed) "Show overload diff highlighting" else "Show ordinary overload syntax"
+        return LineMarkerInfo(
+            name,
+            name.textRange,
+            AllIcons.Actions.ToggleVisibility,
+            { tooltip },
+            GutterIconNavigationHandler { _, _ ->
+                visibility.toggle(virtualFile, group.anchor)
+                function.project.getService(OverloadFadeHighlighters::class.java).clear(virtualFile)
+                DaemonCodeAnalyzer.getInstance(function.project).restart(file)
+            },
+            GutterIconRenderer.Alignment.LEFT,
+        ) { tooltip }
     }
 }
 
@@ -76,29 +139,41 @@ class OverloadFadeHighlighters(private val project: Project) {
         }
     }
 
+    fun clear(file: VirtualFile) {
+        FileDocumentManager.getInstance().getDocument(file)?.let(::clear)
+    }
+
     private fun clear(document: Document) {
         applied.remove(document)?.highlighters?.forEach(RangeHighlighter::dispose)
     }
 }
 
+internal data class OverloadDiffGroup(val anchor: TextRange, val ranges: List<TextRange>)
+
 internal object OverloadDiffAnalyzer {
     private data class Component(val key: String, val normalized: String, val range: TextRange)
     private data class Signature(val function: JSFunction, val components: Map<String, Component>)
 
-    fun ranges(file: PsiFile): List<TextRange> = CachedValuesManager.getCachedValue(file) {
+    fun groups(file: PsiFile): List<OverloadDiffGroup> = CachedValuesManager.getCachedValue(file) {
         CachedValueProvider.Result.create(analyze(file), file)
     }
 
-    private fun analyze(file: PsiFile): List<TextRange> {
+    fun ranges(file: PsiFile): List<TextRange> = groups(file).flatMap { it.ranges }
+
+    private fun analyze(file: PsiFile): List<OverloadDiffGroup> {
         val functions = PsiTreeUtil.findChildrenOfType(file, JSFunction::class.java)
             .filter { it.nameIdentifier != null && it.parent != null }
         val byParent = functions.groupBy { it.parent }
-        val ranges = mutableListOf<TextRange>()
+        val groups = mutableListOf<OverloadDiffGroup>()
         for ((parent, candidates) in byParent) {
             val candidateSet = candidates.toHashSet()
             var group = mutableListOf<JSFunction>()
             fun flush() {
-                if (group.size >= 2) ranges += compare(group)
+                if (group.size >= 2) {
+                    val ranges = compare(group)
+                    val anchor = group.first().nameIdentifier?.textRange
+                    if (anchor != null && ranges.isNotEmpty()) groups += OverloadDiffGroup(anchor, ranges)
+                }
                 group = mutableListOf()
             }
             for (element in parent.children) {
@@ -114,7 +189,7 @@ internal object OverloadDiffAnalyzer {
             }
             flush()
         }
-        return ranges.distinct().sortedBy { it.startOffset }
+        return groups.sortedBy { it.anchor.startOffset }
     }
 
     private fun compare(functions: List<JSFunction>): List<TextRange> {
