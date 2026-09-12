@@ -52,7 +52,7 @@ function typeParams(source, name) { const index=source.indexOf(name);const befor
     fs.rmSync(path.join(root,'mappings.brz.json'));
     const customPlan=await request('mappingGeneration',{configFilePath:'config/typebreeze.json'});
     assert.deepEqual(customPlan.diagnostics,[]);assert.equal(customPlan.files.length,plan.files.length);
-    const missingDefault=await request('mappingGeneration');assert.equal(missingDefault.diagnostics[0].path,'mappings.brz.json');
+    const missingDefault=await request('mappingGeneration');assert.deepEqual(missingDefault,{files:[],diagnostics:[],occurrences:[],diagnosticDocuments:[]});
     for(const invalidPath of ['', '../outside.json', path.resolve(root,'config/typebreeze.json')]){
       const invalidPlan=await request('mappingGeneration',{configFilePath:invalidPath});assert.match(invalidPlan.diagnostics[0].message,/inside the workspace/);
     }

@@ -242,7 +242,10 @@ async function mappingGeneration(params={}) {
   if(!requested.trim()||path.isAbsolute(requested)||relativeConfig==='..'||relativeConfig.startsWith(`..${path.sep}`)||path.isAbsolute(relativeConfig))return{files:[],diagnostics:[{path:configLabel||'mappings.brz.json',message:'Config file path must remain inside the workspace.'}],occurrences:[],diagnosticDocuments:[]};
   const configPath=resolvedConfig;
   const addDocumentDiagnostic=(source,node,message)=>{const fileUri=uri(source.fileName);const list=documentDiagnostics.get(fileUri)||[];list.push({range:range(source,node.getStart(source),node.getEnd()),severity:1,source:'TypeBreeze',message});documentDiagnostics.set(fileUri,list);};
-  let config; try{config=JSON.parse(fs.readFileSync(configPath,'utf8'));}catch(error){return{files:[],diagnostics:[{path:configLabel,message:`Cannot read ${configLabel}: ${error.message}`} ]};}
+  let config; try{config=JSON.parse(fs.readFileSync(configPath,'utf8'));}catch(error){
+    if(error?.code==='ENOENT')return{files:[],diagnostics:[],occurrences:[],diagnosticDocuments:[]};
+    return{files:[],diagnostics:[{path:configLabel,message:`Cannot read ${configLabel}: ${error.message}`}],occurrences:[],diagnosticDocuments:[]};
+  }
   const output=config.outputDirectory; const keyName=config.keyTypeParameter||'TKey';const resultName=config.resultTypeParameter||'TResult'; const mappings=config.mappings;
   if(typeof output!=='string'||!output||!mappings||typeof mappings!=='object'||Array.isArray(mappings))return{files:[],diagnostics:[{path:configLabel,message:'Configuration requires outputDirectory and a mappings object.'}]};
   const outputRoot=path.resolve(root,output); const relOutput=path.relative(root,outputRoot); if(relOutput.startsWith('..')||path.isAbsolute(relOutput))return{files:[],diagnostics:[{path:configLabel,message:'outputDirectory must remain inside the workspace.'}]};
