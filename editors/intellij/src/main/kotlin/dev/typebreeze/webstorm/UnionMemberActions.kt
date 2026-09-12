@@ -62,10 +62,13 @@ private fun showPopup(project:Project,editor:Editor,file:VirtualFile,resolved:Re
 }
 private fun replace(project:Project,editor:Editor,file:VirtualFile,resolved:ResolvedLiteral,value:String){
     val document=editor.document;val start=document.offset(resolved.range.start)?:return;val end=document.offset(resolved.range.end)?:return
-    if(start !in 0 until document.textLength||end>document.textLength||end-start<2)return
-    val quote=document.charsSequence[start];if(quote!='\''&&quote!='"')return
-    val escaped=escapeUnionMember(value,quote)
-    WriteCommandAction.runWriteCommandAction(project,Runnable{document.replaceString(start+1,end-1,escaped)})
+    if(start !in 0 until document.textLength||end>document.textLength||start>=end)return
+    val quote=document.charsSequence[start]
+    val (replaceStart,replaceEnd,replacement)=if(quote=='\''||quote=='"')Triple(start+1,end-1,escapeUnionMember(value,quote)) else {
+        if(document.getText(com.intellij.openapi.util.TextRange(start,end))!=resolved.currentValue)return
+        Triple(start,end,"'${escapeUnionMember(value,'\'')}'")
+    }
+    WriteCommandAction.runWriteCommandAction(project,Runnable{document.replaceString(replaceStart,replaceEnd,replacement)})
 }
 internal fun escapeUnionMember(value:String,quote:Char)=buildString { value.forEach{append(when(it){'\\'->"\\\\";quote->"\\$quote";'\n'->"\\n";'\r'->"\\r";'\t'->"\\t";else->it})} }
 private fun Document.position(offset:Int):Position { val line=getLineNumber(offset);return Position(line,offset-getLineStartOffset(line)) }
@@ -85,7 +88,7 @@ class UnionCache(private val project:Project){
     }
     fun at(file:VirtualFile,document:Document,offset:Int):ResolvedLiteral? {
         val entry=entries[file.url]?.takeIf{it.stamp==document.modificationStamp}?:run{refresh(file);return null}
-        return entry.literals.firstOrNull{val start=document.offset(it.range.start)?:-2;val end=document.offset(it.range.end)?:-1;it.kind=="usage"&&it.assignableMembers.size>1&&offset in (start+1)..(end-1)}
+        return entry.literals.firstOrNull{val start=document.offset(it.range.start)?:-2;val end=document.offset(it.range.end)?:-1;it.kind=="usage"&&it.assignableMembers.size>1&&offset in start until end}
     }
     fun matching(file:VirtualFile,document:Document,range:TextRange):ResolvedLiteral? {
         val entry=entries[file.url]?.takeIf{it.stamp==document.modificationStamp}?:run{refresh(file);return null}

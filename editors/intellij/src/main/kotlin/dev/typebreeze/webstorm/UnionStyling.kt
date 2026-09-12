@@ -52,11 +52,10 @@ function <repeatedOverload>callMethod</repeatedOverload>(<repeatedOverload>key</
 
 class TypeBreezeAnnotator:Annotator {
     override fun annotate(element:PsiElement,holder:AnnotationHolder){
-        val literal=element as? JSLiteralExpression?:return;if(!literal.isStringLiteral)return
-        val file=literal.containingFile.virtualFile?:return;val document=literal.containingFile.viewProvider.document?:return
-        val resolved=literal.project.getService(UnionCache::class.java).matching(file,document,literal.textRange)?:return
+        val file=element.containingFile?.virtualFile?:return;val document=element.containingFile?.viewProvider?.document?:return
+        val resolved=element.project.getService(UnionCache::class.java).matching(file,document,element.textRange)?:return
         val settings=TypeBreezeSettings.instance.state;val key=when(resolved.kind){"declaration"->if(settings.fadeUnusedDeclarations&&resolved.hasUsages==false)TypeBreezeColors.UNUSED_DECLARATION else TypeBreezeColors.DECLARATION;"usage"->TypeBreezeColors.USAGE;else->return}
-        val range=literal.textRange.let{if(it.length>1)TextRange(it.startOffset+1,it.endOffset-1)else it};holder.newSilentAnnotation(HighlightSeverity.INFORMATION).range(range).textAttributes(key).create()
+        val range=element.textRange.let{if(element is JSLiteralExpression&&element.isStringLiteral&&it.length>1)TextRange(it.startOffset+1,it.endOffset-1)else it};holder.newSilentAnnotation(HighlightSeverity.INFORMATION).range(range).textAttributes(key).create()
     }
 }
 

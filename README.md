@@ -66,6 +66,9 @@ Union intelligence applies when TypeScript resolves the assignable values to
 contexts. Mapped and utility types, generics, imports, path mappings, and nested
 object arguments work through TypeScript's own contextual type resolution rather
 than TypeBreeze-specific traversal rules.
+Statically named object-literal keys in mappings such as `Record<Status, Value>`
+or `{ [K in Status]: Value }` are also treated as union-member usages, including
+unquoted keys such as `draft: value`.
 
 ## TypeScript extension methods
 

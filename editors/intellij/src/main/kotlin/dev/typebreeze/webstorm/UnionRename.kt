@@ -31,15 +31,15 @@ class TypeBreezeRenameHandler:RenameHandler {
         val document=editor.document;val stamp=document.modificationStamp;val position=document.positionForRename(editor.caretModel.offset)
         AppExecutorUtil.getAppExecutorService().execute{
             val plan=LspClientManager.getInstance(project).getClients(TypeBreezeLspProvider::class.java).filter{it.descriptor.isSupportedFile(virtualFile)}.firstNotNullOfOrNull{client->runCatching{client.sendRequestSync(5_000){server->(server as TypeBreezeLanguageServer).renamePlan(RenamePlanParams(client.getDocumentIdentifier(virtualFile),position,document.text,stamp,newValue))}}.getOrNull()}
-            ApplicationManager.getApplication().invokeLater{if(plan==null||document.modificationStamp!=stamp)notifyFailure(project)else applyPlan(project,plan,newValue)}
+            ApplicationManager.getApplication().invokeLater{if(plan==null||document.modificationStamp!=stamp)notifyFailure(project)else applyPlan(project,plan)}
         }
     }
     override fun invoke(project:Project,elements:Array<out PsiElement>,dataContext:DataContext){}
 }
 
 private data class PendingEdit(val file:com.intellij.openapi.vfs.VirtualFile,val document:Document,val start:Int,val end:Int,val replacement:String)
-private fun applyPlan(project:Project,plan:RenamePlan,newValue:String){
-    val edits=plan.targets.mapNotNull{target->val file=VirtualFileManager.getInstance().findFileByUrl(target.uri)?:return@mapNotNull null;val document=FileDocumentManager.getInstance().getDocument(file)?:return@mapNotNull null;val start=document.offsetForRename(target.range.start)?:return@mapNotNull null;val end=document.offsetForRename(target.range.end)?:return@mapNotNull null;if(start<0||end>document.textLength||start>=end||document.getText(com.intellij.openapi.util.TextRange(start,end))!=target.expectedText)return@mapNotNull null;val quote=document.charsSequence[start];if(quote!='\''&&quote!='"')return@mapNotNull null;PendingEdit(file,document,start+1,end-1,escapeUnionMember(newValue,quote))}
+private fun applyPlan(project:Project,plan:RenamePlan){
+    val edits=plan.targets.mapNotNull{target->val file=VirtualFileManager.getInstance().findFileByUrl(target.uri)?:return@mapNotNull null;val document=FileDocumentManager.getInstance().getDocument(file)?:return@mapNotNull null;val start=document.offsetForRename(target.range.start)?:return@mapNotNull null;val end=document.offsetForRename(target.range.end)?:return@mapNotNull null;if(start<0||end>document.textLength||start>=end||document.getText(com.intellij.openapi.util.TextRange(start,end))!=target.expectedText)return@mapNotNull null;PendingEdit(file,document,start,end,target.newText)}
     if(edits.size!=plan.targets.size||edits.isEmpty()){notifyFailure(project);return}
     if(!FileModificationService.getInstance().prepareVirtualFilesForWrite(project,edits.map{it.file}.distinct()))return
     WriteCommandAction.runWriteCommandAction(project,Runnable{edits.groupBy{it.document}.forEach{(_,items)->items.sortedByDescending{it.start}.forEach{it.document.replaceString(it.start,it.end,it.replacement)}}})

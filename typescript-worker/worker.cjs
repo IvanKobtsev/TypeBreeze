@@ -51,9 +51,11 @@ function createLanguageService(diskOnly = false) {
 function statVersion(name) { try { return fs.statSync(name).mtimeMs; } catch { return 0; } }
 function createProgram() { if(!languageService)languageService=createLanguageService();return languageService.getProgram(); }
 function syncParams(params){if(params.text===undefined)return;const file=path.resolve(fileURLToPath(params.textDocument.uri));const version=params.clientVersion??params.version??0;const old=overlays.get(file);if(!old||old.version!==version||old.text!==params.text)overlays.set(file,{text:params.text,version});}
-function enclosingString(T, source, at) {
+function isStaticPropertyName(T,node){return !!node&&((T.isIdentifier(node)||T.isStringLiteralLike(node))&&T.isPropertyAssignment(node.parent)&&node.parent.name===node);}
+function isUnionUsageCandidate(T,node){return T.isStringLiteralLike(node)||isStaticPropertyName(T,node);}
+function enclosingUsage(T, source, at) {
   let found;
-  function visit(node) { if (at >= node.getStart(source) && at <= node.getEnd()) { if (T.isStringLiteralLike(node)) found = node; T.forEachChild(node, visit); } }
+  function visit(node) { if (at >= node.getStart(source) && at <= node.getEnd()) { if (isUnionUsageCandidate(T,node)) found = node; T.forEachChild(node, visit); } }
   visit(source); return found;
 }
 function declarationLocation(T, symbol, fallbackSource, fallbackNode) {
@@ -68,6 +70,22 @@ function canonicalSymbol(T, checker, symbol) {
   return current;
 }
 function finiteParts(T,type){const parts=type?(type.isUnion()?type.types:[type]):[];const strings=parts.filter(item=>item.flags&T.TypeFlags.StringLiteral);const invalid=parts.filter(item=>!(item.flags&T.TypeFlags.StringLiteral)&&!(item.flags&(T.TypeFlags.Undefined|T.TypeFlags.Null)));return{parts,strings,valid:strings.length>=2&&strings.length<=100&&!invalid.length};}
+function typeAliasForFiniteType(T,checker,type){if(!finiteParts(T,type).valid)return null;return canonicalSymbol(T,checker,type.aliasSymbol||type.getSymbol?.());}
+function contextualKeyDomain(T,checker,program,node){
+  if(!isStaticPropertyName(T,node))return null;
+  const object=node.parent.parent;let objectType=checker.getContextualType(object);if(!objectType)return null;
+  if(objectType.flags&T.TypeFlags.TypeParameter)objectType=checker.getBaseConstraintOfType(objectType);if(!objectType)return null;
+  if(checker.getIndexTypeOfType(objectType,T.IndexKind.String))return null;
+  const values=checker.getPropertiesOfType(objectType).map(property=>property.name).filter(name=>name!=='__proto__');
+  if(values.length<2||values.length>100||new Set(values).size!==values.length||!values.includes(node.text))return null;
+  const candidates=[];const add=type=>{const parts=finiteParts(T,type);if(parts.valid&&parts.strings.length===values.length&&parts.strings.every(part=>values.includes(part.value)))candidates.push(type);};
+  for(const argument of objectType.aliasTypeArguments||[])add(argument);
+  for(const declaration of objectType.aliasSymbol?.declarations||[]){const visit=child=>{if(T.isMappedTypeNode(child)&&child.typeParameter.constraint)add(checker.getTypeFromTypeNode(child.typeParameter.constraint));T.forEachChild(child,visit);};visit(declaration);}
+  if(!candidates.length&&(objectType.objectFlags&T.ObjectFlags.Mapped)){for(const source of program.getSourceFiles())for(const statement of source.statements)if(T.isTypeAliasDeclaration(statement))add(checker.getTypeFromTypeNode(statement.type));}
+  const unique=[];for(const candidate of candidates){const alias=typeAliasForFiniteType(T,checker,candidate);if(alias&&!unique.includes(alias))unique.push(alias);}
+  if(unique.length!==1)return null;
+  const alias=unique[0],type=checker.getDeclaredTypeOfSymbol(alias);return finiteParts(T,type).valid?{type,alias}:null;
+}
 function contextualTypeForLiteral(T,checker,node){
   let contextual=checker.getContextualType(node);if(finiteParts(T,contextual).valid)return contextual;
   // Inference specializes `T extends DomainType` to this one literal. Recover
@@ -92,7 +110,8 @@ function resolveNode(program, source, node) {
   const T = loadTypeScript();
   if (node.parent && T.isLiteralTypeNode(node.parent)) return null;
   const checker = program.getTypeChecker();
-  const contextual = contextualTypeForLiteral(T,checker,node);
+  const keyDomain=contextualKeyDomain(T,checker,program,node);
+  const contextual = keyDomain?.type||contextualTypeForLiteral(T,checker,node);
   if (!contextual) return null;
   const parts = contextual.isUnion() ? contextual.types : [contextual];
   const stringParts = parts.filter(type => type.flags & T.TypeFlags.StringLiteral);
@@ -101,7 +120,7 @@ function resolveNode(program, source, node) {
   const values = []; const seen = new Set();
   for (const type of stringParts) if (!seen.has(type.value)) { seen.add(type.value); values.push(type.value); }
   if (!values.includes(node.text)) return null;
-  let alias = contextual.aliasSymbol || contextual.getSymbol?.();
+  let alias = keyDomain?.alias||contextual.aliasSymbol || contextual.getSymbol?.();
   if (!alias && T.isPropertyAssignment(node.parent)) {
     const objectType = checker.getContextualType(node.parent.parent);
     const property = objectType?.getProperty(node.parent.name.getText(source));
@@ -147,7 +166,7 @@ function resolve(params) {
   syncParams(params);
   const program = createProgram(); const file = path.resolve(fileURLToPath(params.textDocument.uri));
   const source = program.getSourceFile(file); if (!source) return null;
-  const node = enclosingString(loadTypeScript(), source, offset(source, params.position));
+  const node = enclosingUsage(loadTypeScript(), source, offset(source, params.position));
   return node ? declarationNode(program, source, node) || resolveNode(program, source, node) : null;
 }
 function documentUnions(params) {
@@ -155,7 +174,7 @@ function documentUnions(params) {
   const program = createProgram(); const file = path.resolve(fileURLToPath(params.textDocument.uri));
   const source = program.getSourceFile(file); if (!source) return null;
   const literals = []; const T = loadTypeScript();
-  const visit = node => { if (T.isStringLiteralLike(node)) { const item = declarationNode(program,source,node)||resolveNode(program, source, node); if (item) literals.push(item); } T.forEachChild(node, visit); };
+  const visit = node => { if (isUnionUsageCandidate(T,node)) { const item = declarationNode(program,source,node)||resolveNode(program, source, node); if (item) literals.push(item); } T.forEachChild(node, visit); };
   visit(source);
   if (params.includeUsages !== false) markDeclarationUsages(program,literals);
   return { version: null, clientVersion: params.clientVersion ?? null, generation: Date.now(), literals };
@@ -167,27 +186,27 @@ function markDeclarationUsages(program,literals){
   for(const declaration of declarations)declaration.usageLocations=[];
   const wanted=new Map(declarations.map(item=>[`${locationKey(item.domain)}\0${item.currentValue}`,item]));
   const values=new Set(declarations.map(item=>item.currentValue));const simple=[...values].filter(value=>/^[\w .:/-]+$/.test(value));const T=loadTypeScript();
-  for(const candidateSource of program.getSourceFiles()){if(candidateSource.isDeclarationFile||(simple.length===values.size&&!simple.some(value=>candidateSource.text.includes(value))))continue;const visit=child=>{if(T.isStringLiteralLike(child)&&values.has(child.text)){const usage=resolveNode(program,candidateSource,child);if(usage){const declaration=wanted.get(`${locationKey(usage.domain)}\0${usage.currentValue}`);if(declaration){declaration.hasUsages=true;const location={uri:uri(candidateSource.fileName),range:usage.range};if(!declaration.usageLocations.some(existing=>sameLocation(existing,location)))declaration.usageLocations.push(location);}}}T.forEachChild(child,visit);};visit(candidateSource);}
+  for(const candidateSource of program.getSourceFiles()){if(candidateSource.isDeclarationFile||(simple.length===values.size&&!simple.some(value=>candidateSource.text.includes(value))))continue;const visit=child=>{if(isUnionUsageCandidate(T,child)&&values.has(child.text)){const usage=resolveNode(program,candidateSource,child);if(usage){const declaration=wanted.get(`${locationKey(usage.domain)}\0${usage.currentValue}`);if(declaration){declaration.hasUsages=true;const location={uri:uri(candidateSource.fileName),range:usage.range};if(!declaration.usageLocations.some(existing=>sameLocation(existing,location)))declaration.usageLocations.push(location);}}}T.forEachChild(child,visit);};visit(candidateSource);}
   for(const declaration of declarations)declaration.hasUsages=declaration.hasUsages===true;
 }
 function navigationTargets(params){
   syncParams(params);
-  const program=createProgram();const file=path.resolve(fileURLToPath(params.textDocument.uri));const source=program.getSourceFile(file);if(!source)return[];const T=loadTypeScript();const node=enclosingString(T,source,offset(source,params.position));if(!node)return[];
+  const program=createProgram();const file=path.resolve(fileURLToPath(params.textDocument.uri));const source=program.getSourceFile(file);if(!source)return[];const T=loadTypeScript();const node=enclosingUsage(T,source,offset(source,params.position));if(!node)return[];
   const usage=resolveNode(program,source,node);if(usage){const member=usage.declaredMembers.find(item=>item.value===usage.currentValue);return member?[member.declaration]:[];}
   const declaration=declarationNode(program,source,node);if(!declaration)return[];const targets=[];
   const sameRange=(left,right)=>left.start.line===right.start.line&&left.start.character===right.start.character&&left.end.line===right.end.line&&left.end.character===right.end.character;
   const canPrefilter=/^[\w .:/-]+$/.test(declaration.currentValue);
-  for(const candidateSource of program.getSourceFiles()){if(candidateSource.isDeclarationFile||(canPrefilter&&!candidateSource.text.includes(declaration.currentValue)))continue;const visit=child=>{if(T.isStringLiteralLike(child)&&child.text===declaration.currentValue){const item=resolveNode(program,candidateSource,child);if(item&&item.domain.uri===declaration.domain.uri&&sameRange(item.domain.range,declaration.domain.range))targets.push({uri:uri(candidateSource.fileName),range:item.range});}T.forEachChild(child,visit);};visit(candidateSource);}
+  for(const candidateSource of program.getSourceFiles()){if(candidateSource.isDeclarationFile||(canPrefilter&&!candidateSource.text.includes(declaration.currentValue)))continue;const visit=child=>{if(isUnionUsageCandidate(T,child)&&child.text===declaration.currentValue){const item=resolveNode(program,candidateSource,child);if(item&&item.domain.uri===declaration.domain.uri&&sameRange(item.domain.range,declaration.domain.range)){const target={uri:uri(candidateSource.fileName),range:item.range};if(!targets.some(existing=>sameLocation(existing,target)))targets.push(target);}}T.forEachChild(child,visit);};visit(candidateSource);}
   return targets;
 }
 function renamePlan(params){
-  syncParams(params);const program=createProgram();const file=path.resolve(fileURLToPath(params.textDocument.uri));const source=program.getSourceFile(file);if(!source)return null;const T=loadTypeScript();const node=enclosingString(T,source,offset(source,params.position));if(!node)return null;
+  syncParams(params);const program=createProgram();const file=path.resolve(fileURLToPath(params.textDocument.uri));const source=program.getSourceFile(file);if(!source)return null;const T=loadTypeScript();const node=enclosingUsage(T,source,offset(source,params.position));if(!node)return null;
   const selected=resolveNode(program,source,node)||declarationNode(program,source,node);if(!selected)return null;const oldValue=selected.currentValue;if(params.newValue===oldValue||selected.declaredMembers.some(member=>member.value===params.newValue))return null;
   const declaration=selected.declaredMembers.find(member=>member.value===oldValue)?.declaration;if(!declaration)return null;const declarationFile=path.resolve(fileURLToPath(declaration.uri));const relative=path.relative(root,declarationFile);if(relative.startsWith('..')||path.isAbsolute(relative))return null;
-  const targets=[];const seen=new Set();const add=(candidateSource,candidateRange)=>{const location={uri:uri(candidateSource.fileName),range:candidateRange};const key=locationKey(location);if(!seen.has(key)){seen.add(key);const start=offset(candidateSource,candidateRange.start);const end=offset(candidateSource,candidateRange.end);targets.push({...location,expectedText:candidateSource.text.slice(start,end)});}};
-  const declarationSource=program.getSourceFile(declarationFile);if(!declarationSource)return null;const declarationStart=offset(declarationSource,declaration.range.start);const declarationEnd=offset(declarationSource,declaration.range.end);const declarationNodeAtRange=enclosingString(T,declarationSource,declarationStart+1);if(!declarationNodeAtRange||declarationNodeAtRange.text!==oldValue||declarationNodeAtRange.getStart(declarationSource)!==declarationStart||declarationNodeAtRange.getEnd()!==declarationEnd)return null;add(declarationSource,declaration.range);
+  const targets=[];const seen=new Set();const quoted=(value,quote)=>quote+value.replace(/\\/g,'\\\\').replaceAll(quote,`\\${quote}`).replace(/\n/g,'\\n').replace(/\r/g,'\\r').replace(/\t/g,'\\t')+quote;const add=(candidateSource,candidateRange,candidateNode)=>{const location={uri:uri(candidateSource.fileName),range:candidateRange};const key=locationKey(location);if(!seen.has(key)){seen.add(key);const start=offset(candidateSource,candidateRange.start);const end=offset(candidateSource,candidateRange.end);const expectedText=candidateSource.text.slice(start,end);let newText;if(T.isIdentifier(candidateNode))newText=T.isIdentifierText(params.newValue,T.ScriptTarget.Latest)?params.newValue:quoted(params.newValue,"'");else{const quote=expectedText[0]==='"'?'"':"'";newText=quoted(params.newValue,quote);}targets.push({...location,expectedText,newText});}};
+  const declarationSource=program.getSourceFile(declarationFile);if(!declarationSource)return null;const declarationStart=offset(declarationSource,declaration.range.start);const declarationEnd=offset(declarationSource,declaration.range.end);const declarationNodeAtRange=enclosingUsage(T,declarationSource,declarationStart+1);if(!declarationNodeAtRange||declarationNodeAtRange.text!==oldValue||declarationNodeAtRange.getStart(declarationSource)!==declarationStart||declarationNodeAtRange.getEnd()!==declarationEnd)return null;add(declarationSource,declaration.range,declarationNodeAtRange);
   const canPrefilter=/^[\w .:/-]+$/.test(oldValue);
-  for(const candidateSource of program.getSourceFiles()){if(candidateSource.isDeclarationFile||(canPrefilter&&!candidateSource.text.includes(oldValue)))continue;const visit=child=>{if(T.isStringLiteralLike(child)&&child.text===oldValue){const usage=resolveNode(program,candidateSource,child);if(usage&&sameLocation(usage.domain,selected.domain))add(candidateSource,usage.range);}T.forEachChild(child,visit);};visit(candidateSource);}
+  for(const candidateSource of program.getSourceFiles()){if(candidateSource.isDeclarationFile||(canPrefilter&&!candidateSource.text.includes(oldValue)))continue;const visit=child=>{if(isUnionUsageCandidate(T,child)&&child.text===oldValue){const usage=resolveNode(program,candidateSource,child);if(usage&&sameLocation(usage.domain,selected.domain))add(candidateSource,usage.range,child);}T.forEachChild(child,visit);};visit(candidateSource);}
   return{oldValue,contextualTypeName:selected.contextualTypeName,targets};
 }
 
