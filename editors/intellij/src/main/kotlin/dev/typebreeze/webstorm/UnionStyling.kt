@@ -4,6 +4,7 @@ import com.intellij.lang.annotation.Annotator
 import com.intellij.lang.annotation.AnnotationHolder
 import com.intellij.lang.annotation.HighlightSeverity
 import com.intellij.lang.javascript.psi.JSLiteralExpression
+import com.intellij.lang.javascript.psi.JSProperty
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.*
 import com.intellij.openapi.editor.DefaultLanguageHighlighterColors
@@ -52,10 +53,15 @@ function <repeatedOverload>callMethod</repeatedOverload>(<repeatedOverload>key</
 
 class TypeBreezeAnnotator:Annotator {
     override fun annotate(element:PsiElement,holder:AnnotationHolder){
-        val file=element.containingFile?.virtualFile?:return;val document=element.containingFile?.viewProvider?.document?:return
-        val resolved=element.project.getService(UnionCache::class.java).matching(file,document,element.textRange)?:return
+        val target=when(element){
+            is JSLiteralExpression->element.takeIf{it.isStringLiteral}
+            is JSProperty->element.nameIdentifier?.takeUnless{it is JSLiteralExpression}
+            else->null
+        }?:return
+        val file=target.containingFile?.virtualFile?:return;val document=target.containingFile?.viewProvider?.document?:return
+        val resolved=target.project.getService(UnionCache::class.java).matching(file,document,target.textRange)?:return
         val settings=TypeBreezeSettings.instance.state;val key=when(resolved.kind){"declaration"->if(settings.fadeUnusedDeclarations&&resolved.hasUsages==false)TypeBreezeColors.UNUSED_DECLARATION else TypeBreezeColors.DECLARATION;"usage"->TypeBreezeColors.USAGE;else->return}
-        val range=element.textRange.let{if(element is JSLiteralExpression&&element.isStringLiteral&&it.length>1)TextRange(it.startOffset+1,it.endOffset-1)else it};holder.newSilentAnnotation(HighlightSeverity.INFORMATION).range(range).textAttributes(key).create()
+        val range=target.textRange.let{if(target is JSLiteralExpression&&it.length>1)TextRange(it.startOffset+1,it.endOffset-1)else it};holder.newSilentAnnotation(HighlightSeverity.INFORMATION).range(range).textAttributes(key).create()
     }
 }
 
