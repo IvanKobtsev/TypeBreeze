@@ -65,7 +65,7 @@ class OverloadDiffHighlightingTest : BasePlatformTestCase() {
         assertFalse(faded.any { it.startsWith("Key") || it.startsWith("Value") })
     }
 
-    fun testIdenticalOrNonOverlappingOverloadsAreNotFaded() {
+    fun testIdenticalOrBoilerplateOnlyOverloadsAreNotFaded() {
         val identical = myFixture.configureByText("identical.ts", "function same(value: A): A;\nfunction same(value: A): A;")
         assertEmpty(OverloadDiffAnalyzer.ranges(identical))
 

@@ -126,8 +126,9 @@ internal object OverloadDiffAnalyzer {
         val sharedKeys = signatures.first().components.keys.filter { key ->
             signatures.all { it.components[key]?.normalized == signatures.first().components[key]?.normalized }
         }
-        // A shared name alone is not enough useful repetition to fade a group.
-        if (sharedKeys.none { it != "name" }) return emptyList()
+        // The declaration prefix and name are unavoidable overload boilerplate. Do not fade a
+        // substantially unrelated group unless it also shares meaningful signature structure.
+        if (sharedKeys.none { it !in setOf("modifiers", "name") }) return emptyList()
         return signatures.flatMap { signature -> sharedKeys.mapNotNull { signature.components[it]?.range } }
     }
 
