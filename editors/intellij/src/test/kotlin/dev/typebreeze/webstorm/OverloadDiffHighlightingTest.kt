@@ -1,7 +1,13 @@
 package dev.typebreeze.webstorm
 
 import com.intellij.lang.javascript.psi.JSFunction
+import com.intellij.openapi.editor.impl.DocumentMarkupModel
+import com.intellij.openapi.editor.markup.HighlighterLayer
+import com.intellij.openapi.editor.markup.TextAttributes
+import com.intellij.openapi.command.WriteCommandAction
+import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.util.PsiTreeUtil
+import com.intellij.testFramework.PlatformTestUtil
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 
 class OverloadDiffHighlightingTest : BasePlatformTestCase() {
@@ -91,6 +97,69 @@ class OverloadDiffHighlightingTest : BasePlatformTestCase() {
 
         assertNotNull(provider.getLineMarkerInfo(functions[0]))
         assertNull(provider.getLineMarkerInfo(functions[1]))
+    }
+
+    fun testTogglingOneGroupReusesOtherGroupHighlighters() {
+        val file = myFixture.configureByText(
+            "two-groups.ts",
+            """
+                function find(key: Key): Value;
+                function find(key: Key | null): Value | null;
+                function save(value: Value): Result;
+                function save(value: Value | null): Result | null;
+            """.trimIndent(),
+        )
+        val groups = OverloadDiffAnalyzer.groups(file)
+        assertEquals(2, groups.size)
+        val service = project.getService(OverloadFadeHighlighters::class.java)
+        val attributes = TextAttributes()
+        service.clear(file.virtualFile)
+        service.replace(file.virtualFile, groups.flatMap { it.ranges }, attributes)
+        PlatformTestUtil.dispatchAllEventsInIdeEventQueue()
+        val markup = DocumentMarkupModel.forDocument(myFixture.editor.document, project, true)
+        val before = markup.allHighlighters
+            .filter { it.layer == HighlighterLayer.ERROR - 1 }
+            .associateBy { it.startOffset to it.endOffset }
+
+        service.replace(file.virtualFile, groups[1].ranges, attributes)
+        PlatformTestUtil.dispatchAllEventsInIdeEventQueue()
+        val after = markup.allHighlighters
+            .filter { it.layer == HighlighterLayer.ERROR - 1 }
+            .associateBy { it.startOffset to it.endOffset }
+
+        assertTrue(groups[0].ranges.none { (it.startOffset to it.endOffset) in after })
+        groups[1].ranges.forEach { range ->
+            val key = range.startOffset to range.endOffset
+            assertSame(before[key], after[key])
+        }
+    }
+
+    fun testDocumentEditReusesShiftedHighlighters() {
+        val file = myFixture.configureByText(
+            "edited.ts",
+            "function find(key: Key): Value;\nfunction find(key: Key | null): Value | null;",
+        )
+        val service = project.getService(OverloadFadeHighlighters::class.java)
+        val attributes = TextAttributes()
+        service.clear(file.virtualFile)
+        service.replace(file.virtualFile, OverloadDiffAnalyzer.ranges(file), attributes)
+        PlatformTestUtil.dispatchAllEventsInIdeEventQueue()
+        val document = myFixture.editor.document
+        val markup = DocumentMarkupModel.forDocument(document, project, true)
+        val before = markup.allHighlighters
+            .filter { it.layer == HighlighterLayer.ERROR - 1 }
+            .sortedBy { it.startOffset }
+
+        WriteCommandAction.runWriteCommandAction(project) { document.insertString(0, "// shifted\n") }
+        PsiDocumentManager.getInstance(project).commitDocument(document)
+        service.replace(file.virtualFile, OverloadDiffAnalyzer.ranges(file), attributes)
+        PlatformTestUtil.dispatchAllEventsInIdeEventQueue()
+        val after = markup.allHighlighters
+            .filter { it.layer == HighlighterLayer.ERROR - 1 }
+            .sortedBy { it.startOffset }
+
+        assertEquals(before.size, after.size)
+        before.zip(after).forEach { (old, current) -> assertSame(old, current) }
     }
 
     fun testIdenticalOrBoilerplateOnlyOverloadsAreNotFaded() {

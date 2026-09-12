@@ -11,10 +11,7 @@ import com.intellij.icons.AllIcons
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.editor.Document
-import com.intellij.openapi.editor.EditorFactory
 import com.intellij.openapi.editor.RangeMarker
-import com.intellij.openapi.editor.event.DocumentEvent
-import com.intellij.openapi.editor.event.DocumentListener
 import com.intellij.openapi.editor.colors.EditorColorsManager
 import com.intellij.openapi.editor.impl.DocumentMarkupModel
 import com.intellij.openapi.editor.markup.HighlighterLayer
@@ -96,7 +93,6 @@ class OverloadDiffLineMarkerProvider : LineMarkerProvider {
             { tooltip },
             GutterIconNavigationHandler { _, _ ->
                 visibility.toggle(virtualFile, group.anchor)
-                function.project.getService(OverloadFadeHighlighters::class.java).clear(virtualFile)
                 DaemonCodeAnalyzer.getInstance(function.project).restart(file)
             },
             GutterIconRenderer.Alignment.LEFT,
@@ -106,16 +102,12 @@ class OverloadDiffLineMarkerProvider : LineMarkerProvider {
 
 @Service(Service.Level.PROJECT)
 class OverloadFadeHighlighters(private val project: Project) {
-    private data class Applied(val stamp: Long, val ranges: List<TextRange>, val highlighters: List<RangeHighlighter>)
+    private data class Applied(
+        val stamp: Long,
+        val attributes: TextAttributes,
+        val highlighters: Map<TextRange, RangeHighlighter>,
+    )
     private val applied = mutableMapOf<Document, Applied>()
-
-    init {
-        EditorFactory.getInstance().eventMulticaster.addDocumentListener(object : DocumentListener {
-            override fun documentChanged(event: DocumentEvent) {
-                ApplicationManager.getApplication().invokeLater { clear(event.document) }
-            }
-        }, project)
-    }
 
     fun replace(file: VirtualFile, ranges: List<TextRange>, attributes: TextAttributes) {
         val document = FileDocumentManager.getInstance().getDocument(file) ?: return
@@ -123,11 +115,25 @@ class OverloadFadeHighlighters(private val project: Project) {
         ApplicationManager.getApplication().invokeLater {
             if (project.isDisposed || document.modificationStamp != stamp) return@invokeLater
             val previous = applied[document]
-            if (previous?.stamp == stamp && previous.ranges == ranges) return@invokeLater
-            previous?.highlighters?.forEach(RangeHighlighter::dispose)
+            val requested = ranges.distinct()
+            if (previous?.stamp == stamp && previous.attributes == attributes && previous.highlighters.keys == requested.toSet()) {
+                return@invokeLater
+            }
             val markup = DocumentMarkupModel.forDocument(document, project, true)
-            val highlighters = ranges.map { range ->
-                markup.addRangeHighlighter(
+            val livePrevious = previous?.highlighters?.values
+                ?.filter { it.isValid }
+                ?.associateBy { TextRange(it.startOffset, it.endOffset) }
+                .orEmpty()
+            val reusable = if (previous?.attributes == attributes) {
+                livePrevious.filterKeys { it in requested }
+            } else {
+                emptyMap()
+            }
+            val retained = reusable.values.toSet()
+            previous?.highlighters?.values?.filterNot { it in retained }?.forEach(RangeHighlighter::dispose)
+            val highlighters = reusable.toMutableMap()
+            requested.filterNot { it in highlighters }.forEach { range ->
+                highlighters[range] = markup.addRangeHighlighter(
                     range.startOffset,
                     range.endOffset,
                     HighlighterLayer.ERROR - 1,
@@ -135,7 +141,7 @@ class OverloadFadeHighlighters(private val project: Project) {
                     HighlighterTargetArea.EXACT_RANGE,
                 )
             }
-            applied[document] = Applied(stamp, ranges, highlighters)
+            applied[document] = Applied(stamp, attributes.clone(), highlighters)
         }
     }
 
@@ -144,7 +150,7 @@ class OverloadFadeHighlighters(private val project: Project) {
     }
 
     private fun clear(document: Document) {
-        applied.remove(document)?.highlighters?.forEach(RangeHighlighter::dispose)
+        applied.remove(document)?.highlighters?.values?.forEach(RangeHighlighter::dispose)
     }
 }
 
