@@ -8,6 +8,10 @@ import com.intellij.openapi.actionSystem.*
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.components.Service
+import com.intellij.openapi.components.State
+import com.intellij.openapi.components.Storage
+import com.intellij.openapi.components.StoragePathMacros
+import com.intellij.openapi.components.PersistentStateComponent
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.fileEditor.FileDocumentManager
@@ -32,6 +36,32 @@ import java.util.concurrent.atomic.AtomicLong
 import javax.swing.JComponent
 import javax.swing.JPanel
 
+@Service(Service.Level.PROJECT)
+@State(name="TypeBreezeProjectSettings",storages=[Storage(StoragePathMacros.WORKSPACE_FILE)])
+class TypeBreezeProjectSettings:PersistentStateComponent<TypeBreezeProjectSettings.Options> {
+    data class Options(var configFilePath:String=DEFAULT_CONFIG_FILE)
+    private var options=Options()
+    override fun getState()=options
+    override fun loadState(state:Options){options=state}
+    companion object {
+        const val DEFAULT_CONFIG_FILE="mappings.brz.json"
+        fun normalizeConfigFilePath(value:String):String? {
+            val trimmed=value.trim();if(trimmed.isEmpty())return null
+            if(trimmed.startsWith('/')||trimmed.startsWith('\\')||Regex("^[A-Za-z]:").containsMatchIn(trimmed))return null
+            val path=runCatching{Path.of(trimmed)}.getOrNull()?:return null
+            if(path.isAbsolute)return null
+            val normalized=path.normalize();if(normalized.toString().isEmpty()||normalized.startsWith(".."))return null
+            return normalized.toString().replace('\\','/')
+        }
+    }
+}
+
+private fun Project.mappingConfigRelativePath()=TypeBreezeProjectSettings.normalizeConfigFilePath(getService(TypeBreezeProjectSettings::class.java).state.configFilePath)?:TypeBreezeProjectSettings.DEFAULT_CONFIG_FILE
+private fun Project.mappingConfigPath():Path? {
+    val root=basePath?.let(Path::of)?.normalize()?:return null
+    return root.resolve(mappingConfigRelativePath()).normalize().takeIf{it.startsWith(root)}
+}
+
 class CreateAutoMappingAction : AnAction() {
     override fun getActionUpdateThread() = ActionUpdateThread.BGT
     override fun update(e: AnActionEvent) {
@@ -42,10 +72,10 @@ class CreateAutoMappingAction : AnAction() {
     }
     override fun actionPerformed(e: AnActionEvent) {
         val project=e.project?:return; val editor=e.getData(CommonDataKeys.EDITOR)?:return; val file=e.getData(CommonDataKeys.VIRTUAL_FILE)?:return
-        val root=project.basePath?.let(Path::of)?:return; val configPath=root.resolve("mappings.brz.json")
+        val root=project.basePath?.let(Path::of)?:return; val configPath=project.mappingConfigPath()?:return
         var config=readConfig(configPath)
         if(config==null){
-            val output=Messages.showInputDialog(project,"Generated files folder, relative to the workspace:","Create mappings.brz.json",Messages.getQuestionIcon(),"src/generated",null)?.trim()?.takeIf(String::isNotEmpty)?:return
+            val output=Messages.showInputDialog(project,"Generated files folder, relative to the workspace:","Create ${project.mappingConfigRelativePath()}",Messages.getQuestionIcon(),"src/generated",null)?.trim()?.takeIf(String::isNotEmpty)?:return
             val resolved=root.resolve(output).normalize();if(!resolved.startsWith(root)){notify(project,"Output folder must be inside the workspace.");return}
             config=JsonObject().apply { addProperty("outputDirectory",output.replace('\\','/'));addProperty("keyTypeParameter","TKey");addProperty("resultTypeParameter","TResult");add("mappings",JsonObject()) }
         }
@@ -100,9 +130,10 @@ class MappingGenerationService(private val project:Project):Disposable {
     init {
         project.messageBus.connect(this).subscribe(VirtualFileManager.VFS_CHANGES,object:BulkFileListener{override fun after(events:List<VFileEvent>){events.asSequence().mapNotNull{it.file}.firstOrNull{isMappingInput(it)}?.let(::schedule)}})
     }
-    private fun isMappingInput(file:VirtualFile)=TypeBreezeLspProvider.supports(file)||file.name=="mappings.brz.json"||file.name=="package.json"||file.name.startsWith(".prettierrc")||file.name.startsWith("prettier.config.")
+    private fun isMappingInput(file:VirtualFile)=TypeBreezeLspProvider.supports(file)||Path.of(file.path).normalize()==project.mappingConfigPath()||file.name=="package.json"||file.name.startsWith(".prettierrc")||file.name.startsWith("prettier.config.")
     fun schedule(file:VirtualFile){if(TypeBreezeLspProvider.supports(file))anchor=file;val token=generation.incrementAndGet();AppExecutorUtil.getAppScheduledExecutorService().schedule({if(generation.get()==token)regenerate(file,0,token)},250,TimeUnit.MILLISECONDS)}
     fun regenerate(file:VirtualFile){val token=generation.incrementAndGet();regenerate(file,0,token)}
+    fun configurationChanged(){generation.incrementAndGet();val file=anchor?.takeIf{it.isValid}?:FileEditorManager.getInstance(project).openFiles.firstOrNull(TypeBreezeLspProvider::supports)?:return;regenerate(file)}
     private fun regenerate(file:VirtualFile,attempt:Int,token:Long){
         if(project.isDisposed||project.basePath==null)return
         if(generation.get()!=token)return
@@ -111,7 +142,8 @@ class MappingGenerationService(private val project:Project):Disposable {
         val clients=LspClientManager.getInstance(project).getClients(TypeBreezeLspProvider::class.java).filter{it.descriptor.isSupportedFile(requestFile)}
         if(clients.isEmpty()){if(attempt<20)AppExecutorUtil.getAppScheduledExecutorService().schedule({regenerate(requestFile,attempt+1,token)},500,TimeUnit.MILLISECONDS);return}
         AppExecutorUtil.getAppExecutorService().execute {
-            val plan=clients.firstNotNullOfOrNull{client->runCatching{client.sendRequestSync(30_000){server->(server as TypeBreezeLanguageServer).mappingGeneration()}}.onFailure{LOG.warn("Mapping generation failed",it)}.getOrNull()}?:return@execute
+            val configFilePath=project.mappingConfigRelativePath()
+            val plan=clients.firstNotNullOfOrNull{client->runCatching{client.sendRequestSync(30_000){server->(server as TypeBreezeLanguageServer).mappingGeneration(mapOf("configFilePath" to configFilePath))}}.onFailure{LOG.warn("Mapping generation failed",it)}.getOrNull()}?:return@execute
             ApplicationManager.getApplication().invokeLater {
                 if(generation.get()!=token)return@invokeLater
                 val root=Path.of(project.basePath!!).normalize()

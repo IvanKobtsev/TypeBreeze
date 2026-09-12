@@ -25,7 +25,7 @@
     <codeInsight.lineMarkerProvider language="JavaScript" implementationClass="dev.typebreeze.webstorm.MappingLineMarkerProvider"/>
     <codeInsight.lineMarkerProvider language="JavaScript JSX" implementationClass="dev.typebreeze.webstorm.MappingLineMarkerProvider"/>
     <colorSettingsPage implementation="dev.typebreeze.webstorm.TypeBreezeColorSettingsPage"/>
-    <applicationConfigurable id="typebreeze.settings" displayName="TypeBreeze" instance="dev.typebreeze.webstorm.TypeBreezeConfigurable"/>
+    <projectConfigurable id="typebreeze.settings" displayName="TypeBreeze" instance="dev.typebreeze.webstorm.TypeBreezeConfigurable"/>
     <intentionAction>
       <language>TypeScript</language>
       <className>dev.typebreeze.webstorm.EnumToUnionIntention</className>

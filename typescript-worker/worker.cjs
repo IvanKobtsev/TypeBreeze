@@ -237,14 +237,16 @@ async function formatMappingPlans(plans) {
   }));
 }
 
-async function mappingGeneration() {
-  const T=loadTypeScript(); const configPath=path.join(root,'mappings.brz.json'); const diagnostics=[],occurrences=[],documentDiagnostics=new Map();
+async function mappingGeneration(params={}) {
+  const T=loadTypeScript();const requested=typeof params.configFilePath==='string'?params.configFilePath:'mappings.brz.json';const configLabel=requested.replace(/\\/g,'/');const resolvedConfig=path.resolve(root,requested);const relativeConfig=path.relative(root,resolvedConfig);const diagnostics=[],occurrences=[],documentDiagnostics=new Map();
+  if(!requested.trim()||path.isAbsolute(requested)||relativeConfig==='..'||relativeConfig.startsWith(`..${path.sep}`)||path.isAbsolute(relativeConfig))return{files:[],diagnostics:[{path:configLabel||'mappings.brz.json',message:'Config file path must remain inside the workspace.'}],occurrences:[],diagnosticDocuments:[]};
+  const configPath=resolvedConfig;
   const addDocumentDiagnostic=(source,node,message)=>{const fileUri=uri(source.fileName);const list=documentDiagnostics.get(fileUri)||[];list.push({range:range(source,node.getStart(source),node.getEnd()),severity:1,source:'TypeBreeze',message});documentDiagnostics.set(fileUri,list);};
-  let config; try{config=JSON.parse(fs.readFileSync(configPath,'utf8'));}catch(error){return{files:[],diagnostics:[{path:'mappings.brz.json',message:`Cannot read mappings.brz.json: ${error.message}`} ]};}
+  let config; try{config=JSON.parse(fs.readFileSync(configPath,'utf8'));}catch(error){return{files:[],diagnostics:[{path:configLabel,message:`Cannot read ${configLabel}: ${error.message}`} ]};}
   const output=config.outputDirectory; const keyName=config.keyTypeParameter||'TKey';const resultName=config.resultTypeParameter||'TResult'; const mappings=config.mappings;
-  if(typeof output!=='string'||!output||!mappings||typeof mappings!=='object'||Array.isArray(mappings))return{files:[],diagnostics:[{path:'mappings.brz.json',message:'Configuration requires outputDirectory and a mappings object.'}]};
-  const outputRoot=path.resolve(root,output); const relOutput=path.relative(root,outputRoot); if(relOutput.startsWith('..')||path.isAbsolute(relOutput))return{files:[],diagnostics:[{path:'mappings.brz.json',message:'outputDirectory must remain inside the workspace.'}]};
-  const mappingService=createLanguageService(true);const program=mappingService.getProgram();if(!program)return{files:[],diagnostics:[{path:'mappings.brz.json',message:'The TypeScript project could not be loaded.'}],occurrences:[],diagnosticDocuments:[]};const checker=program.getTypeChecker(); const parsedOptions=program.getCompilerOptions();
+  if(typeof output!=='string'||!output||!mappings||typeof mappings!=='object'||Array.isArray(mappings))return{files:[],diagnostics:[{path:configLabel,message:'Configuration requires outputDirectory and a mappings object.'}]};
+  const outputRoot=path.resolve(root,output); const relOutput=path.relative(root,outputRoot); if(relOutput.startsWith('..')||path.isAbsolute(relOutput))return{files:[],diagnostics:[{path:configLabel,message:'outputDirectory must remain inside the workspace.'}]};
+  const mappingService=createLanguageService(true);const program=mappingService.getProgram();if(!program)return{files:[],diagnostics:[{path:configLabel,message:'The TypeScript project could not be loaded.'}],occurrences:[],diagnosticDocuments:[]};const checker=program.getTypeChecker(); const parsedOptions=program.getCompilerOptions();
   const sourceFiles=program.getSourceFiles().filter(file=>!file.isDeclarationFile&&path.resolve(file.fileName).startsWith(root));
   const canonical=s=>canonicalSymbol(T,checker,s);
   const stripExtension=value=>value.replace(/(\.d)?\.[cm]?[jt]sx?$/i,'').replace(/\/index$/,'');
@@ -266,11 +268,11 @@ async function mappingGeneration() {
   }
   const outputs=new Map(); const plans=[];
   for(const [mappingName,entry] of Object.entries(mappings)){
-    if(!T.isIdentifierText(mappingName,T.ScriptTarget.Latest)||!entry||typeof entry!=='object'){diagnostics.push({path:'mappings.brz.json',message:`Invalid mapping name or entry: ${mappingName}`});continue;}
-    const info=findType(entry); if(!info.declaration){diagnostics.push({path:entry.path||'mappings.brz.json',message:`Cannot find type ${entry.type||''}.`});continue;}
+    if(!T.isIdentifierText(mappingName,T.ScriptTarget.Latest)||!entry||typeof entry!=='object'){diagnostics.push({path:configLabel,message:`Invalid mapping name or entry: ${mappingName}`});continue;}
+    const info=findType(entry); if(!info.declaration){diagnostics.push({path:entry.path||configLabel,message:`Cannot find type ${entry.type||''}.`});continue;}
     const validation=mappingTypeAt({textDocument:{uri:uri(info.source.fileName)},position:position(info.source,info.declaration.name.getStart(info.source)),text:info.source.text,clientVersion:0,keyTypeParameter:keyName,resultTypeParameter:resultName});
     if(!validation?.valid){diagnostics.push({path:entry.path,message:validation?.reason||'Invalid mapping type.'});continue;}
-    const target=path.join(outputRoot,`${entry.type}.map.ts`); const collision=outputs.get(target);if(collision){diagnostics.push({path:'mappings.brz.json',message:`Mappings ${collision} and ${mappingName} target the same generated file.`});continue;}outputs.set(target,mappingName);
+    const target=path.join(outputRoot,`${entry.type}.map.ts`); const collision=outputs.get(target);if(collision){diagnostics.push({path:configLabel,message:`Mappings ${collision} and ${mappingName} target the same generated file.`});continue;}outputs.set(target,mappingName);
     const generatedUri=uri(target);occurrences.push({uri:uri(info.source.fileName),range:range(info.source,info.declaration.name.getStart(info.source),info.declaration.name.getEnd()),kind:'connector',mappingName,targetUri:generatedUri,reason:null});
     const rows=[];const baseProblem='This type acts as a mapping connector and can only be used by components and other functions with exactly one required, non-rest parameter and a named export.';
     for(const source of sourceFiles){
@@ -324,7 +326,7 @@ async function handle(message) {
   if (message.method === 'navigationTargets') return navigationTargets(message.params);
   if (message.method === 'renamePlan') return renamePlan(message.params);
   if (message.method === 'mappingTypeAt') return mappingTypeAt(message.params);
-  if (message.method === 'mappingGeneration') return mappingGeneration();
+  if (message.method === 'mappingGeneration') return mappingGeneration(message.params);
   if (message.method === 'enumToUnionPlan') return enumToUnionPlan(message.params);
   return null;
 }

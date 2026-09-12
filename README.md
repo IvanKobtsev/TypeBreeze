@@ -119,9 +119,10 @@ no TypeBreeze runtime.
 
 **Status: implemented, but not yet stable.** Put the caret on an eligible generic
 type alias or interface and use **Create auto-mapping for “TypeName” type** from
-the editor context menu. TypeBreeze records the mapping in the workspace-root
-`mappings.brz.json` and maintains `<TypeName>.map.ts` in the configured output
-directory.
+the editor context menu. TypeBreeze records the mapping in `mappings.brz.json`
+by default and maintains `<TypeName>.map.ts` in the configured output directory.
+The config file path can be changed under **Settings | TypeBreeze |
+Auto-mapping generator**; it must be relative to and remain inside the workspace.
 
 The first generic parameter must use the configured name (by default `TKey`),
 have a `PropertyKey`-compatible constraint, and produce an object type. Exported

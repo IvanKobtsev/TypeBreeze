@@ -24,7 +24,6 @@ import java.util.concurrent.TimeUnit
 
 class ExtensionMethodAnnotator : Annotator {
     override fun annotate(element: PsiElement, holder: AnnotationHolder) {
-        if (!TypeBreezeSettings.instance.state.styleExtensionMethods) return
         val file = element.containingFile?.virtualFile ?: return
         val document = element.containingFile?.viewProvider?.document ?: return
         if (element.project.getService(ExtensionStyleCache::class.java).matching(file, document, element.textRange) == null) return

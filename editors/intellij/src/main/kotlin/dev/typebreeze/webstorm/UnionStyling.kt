@@ -12,6 +12,7 @@ import com.intellij.openapi.editor.colors.TextAttributesKey
 import com.intellij.openapi.fileTypes.PlainSyntaxHighlighter
 import com.intellij.openapi.fileTypes.SyntaxHighlighter
 import com.intellij.openapi.options.BoundConfigurable
+import com.intellij.openapi.options.ConfigurationException
 import com.intellij.openapi.options.colors.AttributesDescriptor
 import com.intellij.openapi.options.colors.ColorDescriptor
 import com.intellij.openapi.options.colors.ColorSettingsPage
@@ -20,6 +21,7 @@ import com.intellij.openapi.util.NlsContexts
 import com.intellij.openapi.util.TextRange
 import com.intellij.psi.PsiElement
 import com.intellij.ui.dsl.builder.bindSelected
+import com.intellij.ui.dsl.builder.bindText
 import com.intellij.ui.dsl.builder.panel
 import javax.swing.Icon
 import javax.swing.JComponent
@@ -53,7 +55,7 @@ class TypeBreezeAnnotator:Annotator {
         val literal=element as? JSLiteralExpression?:return;if(!literal.isStringLiteral)return
         val file=literal.containingFile.virtualFile?:return;val document=literal.containingFile.viewProvider.document?:return
         val resolved=literal.project.getService(UnionCache::class.java).matching(file,document,literal.textRange)?:return
-        val settings=TypeBreezeSettings.instance.state;val key=when(resolved.kind){"declaration"->if(settings.styleDeclarations){if(settings.fadeUnusedDeclarations&&resolved.hasUsages==false)TypeBreezeColors.UNUSED_DECLARATION else TypeBreezeColors.DECLARATION}else return;"usage"->if(settings.styleUsages)TypeBreezeColors.USAGE else return;else->return}
+        val settings=TypeBreezeSettings.instance.state;val key=when(resolved.kind){"declaration"->if(settings.fadeUnusedDeclarations&&resolved.hasUsages==false)TypeBreezeColors.UNUSED_DECLARATION else TypeBreezeColors.DECLARATION;"usage"->TypeBreezeColors.USAGE;else->return}
         val range=literal.textRange.let{if(it.length>1)TextRange(it.startOffset+1,it.endOffset-1)else it};holder.newSilentAnnotation(HighlightSeverity.INFORMATION).range(range).textAttributes(key).create()
     }
 }
@@ -61,12 +63,26 @@ class TypeBreezeAnnotator:Annotator {
 @Service(Service.Level.APP)
 @State(name="TypeBreezeSettings",storages=[Storage("typebreeze.xml")])
 class TypeBreezeSettings:PersistentStateComponent<TypeBreezeSettings.Options> {
-    data class Options(var styleDeclarations:Boolean=true,var styleUsages:Boolean=true,var fadeUnusedDeclarations:Boolean=true,var styleExtensionMethods:Boolean=true,var fadeRepeatedOverloadSyntax:Boolean=true)
+    data class Options(var fadeUnusedDeclarations:Boolean=true,var fadeRepeatedOverloadSyntax:Boolean=true)
     private var options=Options();override fun getState()=options;override fun loadState(state:Options){options=state}
     companion object { val instance:TypeBreezeSettings get()=ApplicationManager.getApplication().getService(TypeBreezeSettings::class.java) }
 }
 
-class TypeBreezeConfigurable:BoundConfigurable("TypeBreeze") {
-    override fun createPanel()=panel { val settings=TypeBreezeSettings.instance.state;row{checkBox("Style union member declarations").bindSelected(settings::styleDeclarations)};row{checkBox("Fade declarations without usages").bindSelected(settings::fadeUnusedDeclarations)};row{checkBox("Style contextual union member usages").bindSelected(settings::styleUsages)};row{checkBox("Style extension method declarations and calls").bindSelected(settings::styleExtensionMethods)};row{checkBox("Fade repeated overload syntax").bindSelected(settings::fadeRepeatedOverloadSyntax)} }
-    override fun apply(){super.apply();ProjectManager.getInstance().openProjects.forEach{com.intellij.codeInsight.daemon.DaemonCodeAnalyzer.getInstance(it).restart()}}
+class TypeBreezeConfigurable(private val project:com.intellij.openapi.project.Project):BoundConfigurable("TypeBreeze") {
+    private val projectSettings get()=project.getService(TypeBreezeProjectSettings::class.java)
+    override fun createPanel()=panel {
+        val settings=TypeBreezeSettings.instance.state
+        group("Union intelligence"){row{checkBox("Fade unused union members").bindSelected(settings::fadeUnusedDeclarations)}}
+        group("Overloads diff"){row{checkBox("Fade repeated overload syntax").bindSelected(settings::fadeRepeatedOverloadSyntax)}}
+        group("Auto-mapping generator"){row("Config file path:"){textField().bindText(projectSettings.state::configFilePath).resizableColumn()}}
+    }
+    override fun apply(){
+        val oldPath=projectSettings.state.configFilePath
+        super.apply()
+        val normalized=TypeBreezeProjectSettings.normalizeConfigFilePath(projectSettings.state.configFilePath)
+            ?:run{projectSettings.state.configFilePath=oldPath;throw ConfigurationException("Config file path must be a non-empty path inside the workspace.")}
+        projectSettings.state.configFilePath=normalized
+        ProjectManager.getInstance().openProjects.forEach{com.intellij.codeInsight.daemon.DaemonCodeAnalyzer.getInstance(it).restart()}
+        if(oldPath!=normalized)project.getService(MappingGenerationService::class.java).configurationChanged()
+    }
 }
